@@ -50,8 +50,11 @@ files_by_port:
     - tasks/finalpool/email-paper-homepage/emails_config.json
     - tasks/finalpool/filter-low-selling-products/emails_config.json
     - tasks/finalpool/git-bug-hunt/emails_config.json
+    - tasks/finalpool/git-bug-hunt/files/receiver_config.json
     - tasks/finalpool/k8s-deployment-cleanup/emails_config.json
+    - tasks/finalpool/k8s-deployment-cleanup/files/involved_emails.json
     - tasks/finalpool/landing-task-reminder/emails_config.json
+    - tasks/finalpool/landing-task-reminder/groundtruth_workspace/involved_emails.json
     - tasks/finalpool/meeting-assign/email_config.json
     - tasks/finalpool/meeting-assign/preprocess/clean_local_emails.py
     - tasks/finalpool/meeting-assign/preprocess/main.py
@@ -63,13 +66,17 @@ files_by_port:
     - tasks/finalpool/notion-find-job/receivers_config.json
     - tasks/finalpool/notion-hr/emails_config.json
     - tasks/finalpool/notion-hr/evaluation/main.py
+    - tasks/finalpool/notion-hr/files/involved_emails.json
     - tasks/finalpool/notion-hr/preprocess/main.py
     - tasks/finalpool/payable-invoice-checker/email_config.json
     - tasks/finalpool/payable-invoice-checker/evaluation/check_emails.py
+    - tasks/finalpool/payable-invoice-checker/files/involved_emails.json
     - tasks/finalpool/set-conf-cr-ddl/email_config.json
     - tasks/finalpool/sla-timeout-monitor/email_config.json
+    - tasks/finalpool/sla-timeout-monitor/files/involved_emails.json
     - tasks/finalpool/student-interview/email_config.json
     - tasks/finalpool/travel-expense-reimbursement/email_config.json
+    - tasks/finalpool/travel-expense-reimbursement/files/involved_emails.json
     - tasks/finalpool/woocommerce-customer-survey/email_config.json
     - tasks/finalpool/woocommerce-customer-survey/preprocess/main.py
     - tasks/finalpool/woocommerce-new-product/emails_config.json
