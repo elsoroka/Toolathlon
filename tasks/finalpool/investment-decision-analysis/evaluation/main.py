@@ -281,6 +281,12 @@ def main(args):
         accuracy = (report["matched_cells"] / report["total_cells"] * 100) if report["total_cells"] > 0 else 0
         print(f"  - Accuracy: {accuracy:.2f}% ({report['matched_cells']}/{report['total_cells']})")
 
+        # Treat empty comparisons as evaluation failure instead of passing with 0/0.
+        if report["total_cells"] == 0:
+            print(f"  - No comparable cells found for worksheet: {sheet_name}")
+            print("  - This usually means the sheet is empty or data was fetched from the wrong range/file.")
+            exit(1)
+
         # Show mismatches
         if report["mismatches"]:
             print(f"  - Found {len(report['mismatches'])} mismatches:")
@@ -295,6 +301,10 @@ def main(args):
     print(f"\nOverall evaluation results:")
     print(f"  - Overall accuracy: {overall_accuracy:.2f}% ({total_matched}/{total_cells})")
     print(f"  - Worksheets checked: {len(all_reports)}")
+
+    if total_cells == 0:
+        print("No cells were compared across all worksheets. Marking evaluation as failed.")
+        exit(1)
 
     # Save detailed report
     if args.output_file:
