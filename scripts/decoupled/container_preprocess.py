@@ -93,6 +93,7 @@ def build_task_bundle(
             "log_file": host_log_file,
         },
         "eval_config": eval_config_dict,
+        "local_token_key_session": task_config.local_token_key_session,
         "bundle_file": os.path.abspath(bundle_file),
     }
     return bundle
@@ -149,6 +150,7 @@ async def main() -> int:
         task_agent.status_manager.update_preprocess("fail")
         return 1
     task_agent.status_manager.update_preprocess("done")
+    task_config.load_local_token_key_session()
 
     bundle = build_task_bundle(
         task_config=task_config,

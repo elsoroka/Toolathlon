@@ -52,6 +52,7 @@ class ContainerPreprocessTests(unittest.TestCase):
             ),
             max_turns=15,
             max_steps_under_single_turn_mode=30,
+            local_token_key_session={"x": "y"},
         )
 
         bundle = build_task_bundle(
@@ -89,6 +90,7 @@ class ContainerPreprocessTests(unittest.TestCase):
             stop=SimpleNamespace(user_phrases=[], tool_names=[]),
             max_turns=15,
             max_steps_under_single_turn_mode=30,
+            local_token_key_session=None,
         )
 
         bundle = build_task_bundle(
