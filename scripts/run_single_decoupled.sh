@@ -448,7 +448,7 @@ if [ ! -z "$CONTAINER_MODEL_PARAMS_FILE" ]; then
     echo "Setting container env: TOOLATHLON_MODEL_PARAMS_FILE=${CONTAINER_MODEL_PARAMS_FILE}"
 fi
 
-PREPROCESS_CMD_INPLACE="uv run python scripts/decoupled/container_preprocess.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --bundle_file /workspace/dumps/task_bundle.json --host_output_folder /workspace/dumps --debug"
+PREPROCESS_CMD_INPLACE="uv run python -m scripts.decoupled.container_preprocess --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --bundle_file /workspace/dumps/task_bundle.json --host_output_folder $output_folder --debug"
 PREPROCESS_CMD_LOGGED="$PREPROCESS_CMD_INPLACE > /workspace/logs/preprocess.log 2>&1"
 
 if [ "$runmode" = "quickstart" ]; then
@@ -481,7 +481,7 @@ fi
 # Step 4: Start single-port gateway in container
 echo ""
 echo "Step 4: Starting container MCP gateway on port $gateway_port ..."
-GATEWAY_START_CMD="nohup uv run python scripts/decoupled/container_tool_gateway.py --bundle_file /workspace/dumps/task_bundle.json --host 0.0.0.0 --port $gateway_port --debug > /workspace/logs/gateway.log 2>&1 & echo \$!"
+GATEWAY_START_CMD="nohup uv run python -m scripts.decoupled.container_tool_gateway --bundle_file /workspace/dumps/task_bundle.json --host 0.0.0.0 --port $gateway_port --debug > /workspace/logs/gateway.log 2>&1 & echo \$!"
 GATEWAY_PID=$($CONTAINER_RUNTIME exec "${EXEC_ENV_ARGS[@]}" "$CONTAINER_NAME" bash -c "$GATEWAY_START_CMD")
 echo "Gateway PID in container: $GATEWAY_PID"
 
@@ -505,7 +505,7 @@ echo "✓ Gateway is ready: http://127.0.0.1:${gateway_port}/sse"
 echo ""
 echo "Step 5: Running host-side agent loop..."
 HOST_LOOP_CMD=(
-    uv run python scripts/decoupled/host_agent_loop.py
+    uv run python -m scripts.decoupled.host_agent_loop
     --bundle_file "$HOST_BUNDLE_FILE"
     --gateway_url "http://127.0.0.1:${gateway_port}/sse"
     --gateway_server_name "container_gateway"
@@ -530,7 +530,7 @@ fi
 # Step 6: Container evaluation
 echo ""
 echo "Step 6: Running evaluation in container..."
-EVAL_CMD_INPLACE="uv run python scripts/decoupled/container_eval.py --bundle_file /workspace/dumps/task_bundle.json"
+EVAL_CMD_INPLACE="uv run python -m scripts.decoupled.container_eval --bundle_file /workspace/dumps/task_bundle.json"
 EVAL_CMD_LOGGED="$EVAL_CMD_INPLACE > /workspace/logs/eval.log 2>&1"
 if [ "$runmode" = "quickstart" ]; then
     EVAL_CMD="$EVAL_CMD_INPLACE"
