@@ -1258,6 +1258,13 @@ API_MAPPINGS = {
         context_window=1000000,
         openrouter_config={"provider": {"only": ["anthropic"]}}
     ),
+    'claude-4.6-sonnet': Dict(
+        api_model={"openrouter": "anthropic/claude-sonnet-4.6"},
+        price=[0.003, 0.015],
+        concurrency=32,
+        context_window=1000000,
+        openrouter_config={"provider": {"only": ["anthropic"]}}
+    ),
     'claude-4.1-opus-0805': Dict(
         api_model={"aihubmix": "claude-opus-4-1-20250805",
                    "openrouter": "anthropic/claude-opus-4.1",
@@ -1276,6 +1283,14 @@ API_MAPPINGS = {
     ),
     'gemini-3-pro-preview': Dict(
         api_model={"openrouter": "google/gemini-3-pro-preview",
+                   },
+        price=[0.002, 0.012],
+        concurrency=32,
+        context_window=1000000,
+        openrouter_config={"provider": {"only": ["google-vertex"]}}
+    ),
+    'gemini-3.1-pro-preview': Dict(
+        api_model={"openrouter": "google/gemini-3.1-pro-preview",
                    },
         price=[0.002, 0.012],
         concurrency=32,
