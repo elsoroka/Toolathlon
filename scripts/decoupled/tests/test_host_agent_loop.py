@@ -6,6 +6,7 @@ import yaml
 
 from scripts.decoupled.host_agent_loop import (
     build_gateway_runtime_mcp_config,
+    decoupled_termination_checker,
     expand_stop_tool_names,
     filter_local_tools,
 )
@@ -47,6 +48,36 @@ class HostAgentLoopHelperTests(unittest.TestCase):
             self.assertEqual(config["type"], "sse")
             self.assertEqual(config["name"], "gateway_a")
             self.assertEqual(config["params"]["url"], "http://127.0.0.1:10086/sse")
+
+    def test_decoupled_termination_checker_stops_on_no_tool_call(self) -> None:
+        should_stop = decoupled_termination_checker(
+            content="final answer",
+            recent_tools=[],
+            check_target="agent",
+            user_stop_phrases=["#### STOP"],
+            agent_stop_tools=["local-claim_done"],
+        )
+        self.assertTrue(should_stop)
+
+    def test_decoupled_termination_checker_stops_on_stop_tool(self) -> None:
+        should_stop = decoupled_termination_checker(
+            content="",
+            recent_tools=[{"function": {"name": "local-claim_done"}}],
+            check_target="agent",
+            user_stop_phrases=[],
+            agent_stop_tools=["local-claim_done"],
+        )
+        self.assertTrue(should_stop)
+
+    def test_decoupled_termination_checker_user_phrase(self) -> None:
+        should_stop = decoupled_termination_checker(
+            content="please #### STOP now",
+            recent_tools=[],
+            check_target="user",
+            user_stop_phrases=["#### STOP"],
+            agent_stop_tools=[],
+        )
+        self.assertTrue(should_stop)
 
 
 if __name__ == "__main__":

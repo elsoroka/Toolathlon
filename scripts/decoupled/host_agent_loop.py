@@ -43,6 +43,29 @@ def expand_stop_tool_names(stop_tools: List[str], gateway_server_name: str) -> L
     return sorted(expanded)
 
 
+def decoupled_termination_checker(
+    content: str,
+    recent_tools: List[Dict],
+    check_target: str = "user",
+    user_stop_phrases: List[str] = [],
+    agent_stop_tools: List[str] = [],
+) -> bool:
+    if default_termination_checker(
+        content=content,
+        recent_tools=recent_tools,
+        check_target=check_target,
+        user_stop_phrases=user_stop_phrases,
+        agent_stop_tools=agent_stop_tools,
+    ):
+        return True
+
+    # Decoupled hard requirement: stop when the agent makes no tool call in this round.
+    if check_target == "agent" and len(recent_tools) == 0:
+        return True
+
+    return False
+
+
 def build_gateway_runtime_mcp_config(
     runtime_dir: str,
     gateway_server_name: str,
@@ -142,7 +165,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
         user_client=user_client,
         mcp_config=mcp_config,
         termination_checker=partial(
-            default_termination_checker,
+            decoupled_termination_checker,
             user_stop_phrases=task_config.stop.user_phrases,
             agent_stop_tools=task_config.stop.tool_names,
         ),
