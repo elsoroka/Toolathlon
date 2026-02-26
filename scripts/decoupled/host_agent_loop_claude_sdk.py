@@ -52,9 +52,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--permission_mode",
-        default="dontAsk",
+        default="default",
         choices=["default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"],
-        help="Claude permission mode. Use dontAsk in host loop to avoid interactive permission flow.",
+        help="Claude permission mode.",
     )
     parser.add_argument("--max_turns", type=int, default=None)
     parser.add_argument("--with_proxy", action="store_true")
