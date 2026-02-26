@@ -21,7 +21,7 @@ class HostAgentLoopClaudeSDKTests(unittest.TestCase):
     def test_resolve_claude_sdk_env_maps_auth_token(self) -> None:
         resolved = resolve_claude_sdk_env(
             {
-                "ANTHROPIC_BASE_URL": "https://api.example.com",
+                "TOOLATHLON_OPENAI_BASE_URL": "https://api.example.com",
                 "ANTHROPIC_AUTH_TOKEN": "token-a",
             }
         )
@@ -31,11 +31,23 @@ class HostAgentLoopClaudeSDKTests(unittest.TestCase):
     def test_resolve_claude_sdk_env_prefers_api_key(self) -> None:
         resolved = resolve_claude_sdk_env(
             {
-                "ANTHROPIC_API_KEY": "token-api",
+                "TOOLATHLON_OPENAI_API_KEY": "token-api",
                 "ANTHROPIC_AUTH_TOKEN": "token-auth",
             }
         )
         self.assertEqual(resolved["ANTHROPIC_API_KEY"], "token-api")
+
+    def test_resolve_claude_sdk_env_prefers_overrides(self) -> None:
+        resolved = resolve_claude_sdk_env(
+            {
+                "TOOLATHLON_OPENAI_BASE_URL": "https://old.example.com",
+                "TOOLATHLON_OPENAI_API_KEY": "old-token",
+            },
+            base_url_override="https://new.example.com",
+            api_key_override="new-token",
+        )
+        self.assertEqual(resolved["ANTHROPIC_BASE_URL"], "https://new.example.com")
+        self.assertEqual(resolved["ANTHROPIC_API_KEY"], "new-token")
 
     def test_parse_assistant_message_extracts_tool_calls(self) -> None:
         message = AssistantMessage(

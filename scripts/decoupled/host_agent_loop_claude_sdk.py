@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gateway_url", required=True, help="SSE endpoint, e.g. http://127.0.0.1:10086/sse")
     parser.add_argument("--gateway_server_name", default="container_gateway")
     parser.add_argument("--model", default=None, help="Claude model id override")
+    parser.add_argument("--base_url", default=None, help="API base URL override (unified-style)")
+    parser.add_argument("--api_key", default=None, help="API key override (unified-style)")
     parser.add_argument("--max_turns", type=int, default=None)
     parser.add_argument("--with_proxy", action="store_true")
     parser.add_argument("--debug", action="store_true")
@@ -47,15 +49,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_claude_sdk_env(source_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def resolve_claude_sdk_env(
+    source_env: Optional[Dict[str, str]] = None,
+    base_url_override: Optional[str] = None,
+    api_key_override: Optional[str] = None,
+) -> Dict[str, str]:
     env = source_env if source_env is not None else os.environ
     resolved: Dict[str, str] = {}
 
-    base_url = env.get("ANTHROPIC_BASE_URL")
+    base_url = (
+        base_url_override
+        or env.get("TOOLATHLON_OPENAI_BASE_URL")
+        or env.get("ANTHROPIC_BASE_URL")
+    )
     if base_url:
         resolved["ANTHROPIC_BASE_URL"] = base_url
 
-    api_key = env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")
+    api_key = (
+        api_key_override
+        or env.get("TOOLATHLON_OPENAI_API_KEY")
+        or env.get("ANTHROPIC_API_KEY")
+        or env.get("ANTHROPIC_AUTH_TOKEN")
+    )
     if api_key:
         resolved["ANTHROPIC_API_KEY"] = api_key
 
@@ -236,7 +251,10 @@ async def run_host_loop(args: argparse.Namespace) -> int:
         max_turns = int(bundle.get("max_steps_under_single_turn_mode") or task_config.max_steps_under_single_turn_mode or 100)
 
     model_name = args.model or agent_config.model.short_name
-    sdk_env = resolve_claude_sdk_env()
+    sdk_env = resolve_claude_sdk_env(
+        base_url_override=args.base_url,
+        api_key_override=args.api_key,
+    )
     if "ANTHROPIC_API_KEY" not in sdk_env:
         raise RuntimeError("Missing ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) for Claude SDK host loop")
 
