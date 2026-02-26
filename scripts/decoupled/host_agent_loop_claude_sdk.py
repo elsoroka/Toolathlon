@@ -363,6 +363,9 @@ async def run_host_loop(args: argparse.Namespace) -> int:
                 task_config.system_prompts.agent,
                 args.tool_call_mode,
             ),
+            # Disable Claude built-in tools (WebFetch/Bash/etc.) so decoupled runs
+            # only use container gateway MCP tools.
+            tools=[],
             mcp_servers={
                 args.gateway_server_name: {
                     "type": "sse",
@@ -374,6 +377,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
             cwd=task_config.agent_workspace,
             env=sdk_env,
             can_use_tool=allow_all_tools,
+            extra_args={"strict-mcp-config": None},
         )
 
         async for message in query(prompt=single_prompt_stream(task_config.task_str), options=options):
