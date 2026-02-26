@@ -4,7 +4,7 @@
 # preprocess + gateway in container, agent loop on host, eval in container.
 # Usage:
 #   ./run_single_decoupled.sh <task_dir> <runmode> <dump_path> <modelname> \
-#     [provider] [maxstep] [eval_config] [image_name] [gateway_port] [host_loop_backend]
+#     [provider] [maxstep] [eval_config] [image_name] [gateway_port] [host_loop_backend] [tool_call_mode]
 
 #### If you want to use the unified model provider, 
 # but do not want to explicitly export these environment variables in your shell, 
@@ -27,6 +27,7 @@ eval_config=${7:-"scripts/formal_run_v0.json"}
 image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
 gateway_port=${9:-""}
 host_loop_backend=${10:-"openai"}
+tool_call_mode=${11:-"parallel"}
 
 taskdomain=${task_dir_arg%/*}
 taskname=${task_dir_arg#*/}
@@ -56,6 +57,7 @@ echo "Task directory: $task_dir_arg"
 echo "Runmode: $runmode"
 echo "Modelname: $modelname"
 echo "Host loop backend: $host_loop_backend"
+echo "Tool call mode: $tool_call_mode"
 echo "Container log: $container_log_path"
 echo "Run log: $run_log_path"
 echo "Output folder: $output_folder"
@@ -523,6 +525,7 @@ case "$host_loop_backend" in
             --gateway_url "http://127.0.0.1:${gateway_port}/sse"
             --gateway_server_name "container_gateway"
             --model "$modelname"
+            --tool_call_mode "$tool_call_mode"
             --debug
         )
         ;;

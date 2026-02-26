@@ -122,10 +122,14 @@ class HostAgentLoopClaudeSDKTests(unittest.TestCase):
         self.assertEqual(reason, "max_turns_reached")
 
     def test_build_runtime_system_prompt_contains_serial_tool_constraints(self) -> None:
-        prompt = build_runtime_system_prompt("base prompt")
+        prompt = build_runtime_system_prompt("base prompt", "serial")
         self.assertIn("base prompt", prompt)
         self.assertIn("At most one tool call per assistant turn", prompt)
         self.assertIn("Do not dispatch parallel sibling tool calls", prompt)
+
+    def test_build_runtime_system_prompt_parallel_mode_no_serial_guard(self) -> None:
+        prompt = build_runtime_system_prompt("base prompt", "parallel")
+        self.assertEqual(prompt, "base prompt")
 
 
 if __name__ == "__main__":

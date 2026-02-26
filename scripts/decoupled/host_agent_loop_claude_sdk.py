@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base_url", default=None, help="API base URL override (unified-style)")
     parser.add_argument("--api_key", default=None, help="API key override (unified-style)")
     parser.add_argument(
+        "--tool_call_mode",
+        default="parallel",
+        choices=["parallel", "serial"],
+        help="Tool-calling style. 'serial' adds a prompt guard to avoid sibling parallel calls.",
+    )
+    parser.add_argument(
         "--permission_mode",
         default="dontAsk",
         choices=["default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"],
@@ -240,14 +246,16 @@ def write_traj_log(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False)
 
 
-def build_runtime_system_prompt(base_prompt: str) -> str:
-    guard = (
-        "\n\nExecution constraints:\n"
-        "1) At most one tool call per assistant turn.\n"
-        "2) Wait for the tool result before issuing the next tool call.\n"
-        "3) Do not dispatch parallel sibling tool calls in one response."
-    )
-    return f"{base_prompt}{guard}"
+def build_runtime_system_prompt(base_prompt: str, tool_call_mode: str) -> str:
+    if tool_call_mode == "serial":
+        guard = (
+            "\n\nExecution constraints:\n"
+            "1) At most one tool call per assistant turn.\n"
+            "2) Wait for the tool result before issuing the next tool call.\n"
+            "3) Do not dispatch parallel sibling tool calls in one response."
+        )
+        return f"{base_prompt}{guard}"
+    return base_prompt
 
 
 def preview_text(text: str, limit: int = MAX_CONSOLE_PREVIEW_CHARS) -> str:
@@ -351,7 +359,10 @@ async def run_host_loop(args: argparse.Namespace) -> int:
 
         options = ClaudeAgentOptions(
             model=model_name,
-            system_prompt=build_runtime_system_prompt(task_config.system_prompts.agent),
+            system_prompt=build_runtime_system_prompt(
+                task_config.system_prompts.agent,
+                args.tool_call_mode,
+            ),
             mcp_servers={
                 args.gateway_server_name: {
                     "type": "sse",
