@@ -4,7 +4,7 @@
 # preprocess + gateway in container, agent loop on host, eval in container.
 # Usage:
 #   ./run_single_decoupled.sh <task_dir> <runmode> <dump_path> <modelname> \
-#     [provider] [maxstep] [eval_config] [image_name] [gateway_port]
+#     [provider] [maxstep] [eval_config] [image_name] [gateway_port] [host_loop_backend]
 
 #### If you want to use the unified model provider, 
 # but do not want to explicitly export these environment variables in your shell, 
@@ -26,6 +26,7 @@ maxstep=${6:-"100"}
 eval_config=${7:-"scripts/formal_run_v0.json"}
 image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
 gateway_port=${9:-""}
+host_loop_backend=${10:-"openai"}
 
 taskdomain=${task_dir_arg%/*}
 taskname=${task_dir_arg#*/}
@@ -54,6 +55,7 @@ echo "Project root: $PROJECT_ROOT"
 echo "Task directory: $task_dir_arg"
 echo "Runmode: $runmode"
 echo "Modelname: $modelname"
+echo "Host loop backend: $host_loop_backend"
 echo "Container log: $container_log_path"
 echo "Run log: $run_log_path"
 echo "Output folder: $output_folder"
@@ -504,13 +506,32 @@ echo "✓ Gateway is ready: http://127.0.0.1:${gateway_port}/sse"
 # Step 5: Host-side agent loop
 echo ""
 echo "Step 5: Running host-side agent loop..."
-HOST_LOOP_CMD=(
-    uv run python -m scripts.decoupled.host_agent_loop
-    --bundle_file "$HOST_BUNDLE_FILE"
-    --gateway_url "http://127.0.0.1:${gateway_port}/sse"
-    --gateway_server_name "container_gateway"
-    --debug
-)
+case "$host_loop_backend" in
+    openai|openai_agents)
+        HOST_LOOP_CMD=(
+            uv run python -m scripts.decoupled.host_agent_loop
+            --bundle_file "$HOST_BUNDLE_FILE"
+            --gateway_url "http://127.0.0.1:${gateway_port}/sse"
+            --gateway_server_name "container_gateway"
+            --debug
+        )
+        ;;
+    claude|claude_sdk|claude_agent_sdk)
+        HOST_LOOP_CMD=(
+            uv run python -m scripts.decoupled.host_agent_loop_claude_sdk
+            --bundle_file "$HOST_BUNDLE_FILE"
+            --gateway_url "http://127.0.0.1:${gateway_port}/sse"
+            --gateway_server_name "container_gateway"
+            --model "$modelname"
+            --debug
+        )
+        ;;
+    *)
+        echo "✗ Unsupported host loop backend: $host_loop_backend"
+        echo "Supported values: openai, openai_agents, claude, claude_sdk, claude_agent_sdk"
+        exit 1
+        ;;
+esac
 
 set +e
 if [ "$runmode" = "quickstart" ]; then
