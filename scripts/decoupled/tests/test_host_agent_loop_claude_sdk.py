@@ -9,6 +9,7 @@ from claude_agent_sdk.types import (
 )
 
 from scripts.decoupled.host_agent_loop_claude_sdk import (
+    build_allowed_mcp_tool_names,
     build_runtime_system_prompt,
     decide_task_status,
     parse_assistant_message,
@@ -19,6 +20,19 @@ from utils.roles.task_agent import TaskStatus
 
 
 class HostAgentLoopClaudeSDKTests(unittest.TestCase):
+    def test_build_allowed_mcp_tool_names(self) -> None:
+        names = build_allowed_mcp_tool_names(
+            gateway_server_name="container_gateway",
+            tool_names=["fetch_json", "local-claim_done", "fetch_json"],
+        )
+        self.assertEqual(
+            names,
+            [
+                "mcp__container_gateway__fetch_json",
+                "mcp__container_gateway__local-claim_done",
+            ],
+        )
+
     def test_resolve_claude_sdk_env_maps_auth_token(self) -> None:
         resolved = resolve_claude_sdk_env(
             {

@@ -5,14 +5,16 @@ import json
 import os
 import traceback
 import uuid
+from urllib.parse import urlparse
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+
+import aiohttp
 
 from claude_agent_sdk import query
 from claude_agent_sdk.types import (
     AssistantMessage,
     ClaudeAgentOptions,
     ContentBlock,
-    PermissionResultAllow,
     ResultMessage,
     StreamEvent,
     SystemMessage,
@@ -236,14 +238,122 @@ async def single_prompt_stream(prompt: str) -> AsyncIterator[Dict[str, Any]]:
     }
 
 
-async def allow_all_tools(_tool_name: str, _tool_input: Dict[str, Any], _ctx: Any) -> PermissionResultAllow:
-    return PermissionResultAllow()
-
-
 def write_traj_log(path: str, payload: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
+
+
+def build_allowed_mcp_tool_names(gateway_server_name: str, tool_names: List[str]) -> List[str]:
+    names = [f"mcp__{gateway_server_name}__{name}" for name in tool_names if name]
+    # keep order while removing duplicates
+    return list(dict.fromkeys(names))
+
+
+async def list_gateway_tools_via_sse(gateway_url: str, timeout_seconds: int = 20) -> List[str]:
+    parsed = urlparse(gateway_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError(f"Invalid gateway URL: {gateway_url}")
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_seconds)) as session:
+        async with session.get(gateway_url) as sse_resp:
+            if sse_resp.status != 200:
+                raise RuntimeError(f"Gateway SSE connect failed: {sse_resp.status}")
+
+            endpoint_path: Optional[str] = None
+            event_name = "message"
+            data_lines: List[str] = []
+
+            async for raw_line in sse_resp.content:
+                line = raw_line.decode("utf-8", errors="ignore").strip("\r\n")
+
+                if line == "":
+                    if data_lines:
+                        payload = "\n".join(data_lines)
+                        if event_name == "endpoint":
+                            endpoint_path = payload.strip()
+                            break
+                    event_name = "message"
+                    data_lines = []
+                    continue
+
+                if line.startswith("event:"):
+                    event_name = line[len("event:") :].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:") :].lstrip())
+
+            if not endpoint_path:
+                raise RuntimeError("Gateway SSE did not return endpoint path")
+
+            if not endpoint_path.startswith("/"):
+                endpoint_path = f"/{endpoint_path}"
+            messages_url = f"{origin}{endpoint_path}"
+
+            await session.post(
+                messages_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {},
+                },
+            )
+            await session.post(
+                messages_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": {},
+                },
+            )
+
+            event_name = "message"
+            data_lines = []
+            async for raw_line in sse_resp.content:
+                line = raw_line.decode("utf-8", errors="ignore").strip("\r\n")
+
+                if line == "":
+                    if data_lines:
+                        payload = "\n".join(data_lines)
+                        if event_name == "message":
+                            parsed_payload = json.loads(payload)
+                            if parsed_payload.get("id") == 2:
+                                tools = parsed_payload.get("result", {}).get("tools", [])
+                                return [str(tool.get("name")) for tool in tools if isinstance(tool, dict)]
+                    event_name = "message"
+                    data_lines = []
+                    continue
+
+                if line.startswith("event:"):
+                    event_name = line[len("event:") :].strip()
+                elif line.startswith("data:"):
+                    data_lines.append(line[len("data:") :].lstrip())
+
+    raise RuntimeError("Gateway tools/list response not received")
+
+
+async def resolve_allowed_tools_for_gateway(
+    gateway_url: str,
+    gateway_server_name: str,
+    debug: bool = False,
+) -> List[str]:
+    try:
+        gateway_tools = await list_gateway_tools_via_sse(gateway_url)
+    except Exception as e:
+        if debug:
+            print(f"[allowed_tools] list tools from gateway failed: {e}")
+        return []
+
+    allowed_tools = build_allowed_mcp_tool_names(
+        gateway_server_name=gateway_server_name,
+        tool_names=gateway_tools,
+    )
+    if debug:
+        print(f"[allowed_tools] gateway tools: {gateway_tools}")
+        print(f"[allowed_tools] sdk allowed tools: {allowed_tools}")
+    return allowed_tools
 
 
 def build_runtime_system_prompt(base_prompt: str, tool_call_mode: str) -> str:
@@ -356,6 +466,11 @@ async def run_host_loop(args: argparse.Namespace) -> int:
 
     try:
         os.makedirs(task_config.agent_workspace, exist_ok=True)
+        allowed_tools = await resolve_allowed_tools_for_gateway(
+            gateway_url=args.gateway_url,
+            gateway_server_name=args.gateway_server_name,
+            debug=args.debug,
+        )
 
         options = ClaudeAgentOptions(
             model=model_name,
@@ -372,11 +487,11 @@ async def run_host_loop(args: argparse.Namespace) -> int:
                     "url": args.gateway_url,
                 }
             },
+            allowed_tools=allowed_tools,
             permission_mode=args.permission_mode,
             max_turns=max_turns,
             cwd=task_config.agent_workspace,
             env=sdk_env,
-            can_use_tool=allow_all_tools,
             extra_args={"strict-mcp-config": None},
         )
 
