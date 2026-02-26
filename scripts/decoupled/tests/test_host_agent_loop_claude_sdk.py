@@ -9,6 +9,7 @@ from claude_agent_sdk.types import (
 )
 
 from scripts.decoupled.host_agent_loop_claude_sdk import (
+    build_runtime_system_prompt,
     decide_task_status,
     parse_assistant_message,
     parse_user_message_content,
@@ -119,6 +120,12 @@ class HostAgentLoopClaudeSDKTests(unittest.TestCase):
         status, reason = decide_task_status(result_message, saw_stop_tool=False, saw_no_tool_call_turn=False)
         self.assertEqual(status, TaskStatus.MAX_TURNS_REACHED)
         self.assertEqual(reason, "max_turns_reached")
+
+    def test_build_runtime_system_prompt_contains_serial_tool_constraints(self) -> None:
+        prompt = build_runtime_system_prompt("base prompt")
+        self.assertIn("base prompt", prompt)
+        self.assertIn("At most one tool call per assistant turn", prompt)
+        self.assertIn("Do not dispatch parallel sibling tool calls", prompt)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="Claude model id override")
     parser.add_argument("--base_url", default=None, help="API base URL override (unified-style)")
     parser.add_argument("--api_key", default=None, help="API key override (unified-style)")
+    parser.add_argument(
+        "--permission_mode",
+        default="dontAsk",
+        choices=["default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"],
+        help="Claude permission mode. Use dontAsk in host loop to avoid interactive permission flow.",
+    )
     parser.add_argument("--max_turns", type=int, default=None)
     parser.add_argument("--with_proxy", action="store_true")
     parser.add_argument("--debug", action="store_true")
@@ -234,6 +240,16 @@ def write_traj_log(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False)
 
 
+def build_runtime_system_prompt(base_prompt: str) -> str:
+    guard = (
+        "\n\nExecution constraints:\n"
+        "1) At most one tool call per assistant turn.\n"
+        "2) Wait for the tool result before issuing the next tool call.\n"
+        "3) Do not dispatch parallel sibling tool calls in one response."
+    )
+    return f"{base_prompt}{guard}"
+
+
 def preview_text(text: str, limit: int = MAX_CONSOLE_PREVIEW_CHARS) -> str:
     if len(text) <= limit:
         return text
@@ -335,14 +351,14 @@ async def run_host_loop(args: argparse.Namespace) -> int:
 
         options = ClaudeAgentOptions(
             model=model_name,
-            system_prompt=task_config.system_prompts.agent,
+            system_prompt=build_runtime_system_prompt(task_config.system_prompts.agent),
             mcp_servers={
                 args.gateway_server_name: {
                     "type": "sse",
                     "url": args.gateway_url,
                 }
             },
-            permission_mode="default",
+            permission_mode=args.permission_mode,
             max_turns=max_turns,
             cwd=task_config.agent_workspace,
             env=sdk_env,
