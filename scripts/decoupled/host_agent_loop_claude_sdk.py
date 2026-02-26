@@ -36,6 +36,17 @@ from utils.status_manager import TaskStatusManager
 from utils.task_runner.runner import TaskRunner
 
 MAX_CONSOLE_PREVIEW_CHARS = 1200
+MAX_INLINE_ARGS_CHARS = 420
+MAX_INLINE_OUTPUT_CHARS = 500
+
+ANSI_RESET = "\033[0m"
+ANSI_DIM = "\033[2m"
+ANSI_CYAN = "\033[36m"
+ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
+ANSI_RED = "\033[31m"
+ANSI_MAGENTA = "\033[35m"
+ANSI_BOLD = "\033[1m"
 
 
 def parse_args() -> argparse.Namespace:
@@ -374,49 +385,127 @@ def preview_text(text: str, limit: int = MAX_CONSOLE_PREVIEW_CHARS) -> str:
     return f"{text[:limit]} ... [truncated {len(text) - limit} chars]"
 
 
-def print_assistant_message_realtime(message: AssistantMessage) -> None:
-    printed_header = False
+def now_hms() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def colorize(text: str, color: str) -> str:
+    return f"{color}{text}{ANSI_RESET}"
+
+
+def print_log_line(tag: str, message: str, color: str = ANSI_CYAN) -> None:
+    ts = colorize(now_hms(), ANSI_DIM)
+    tag_text = colorize(f"{tag:<10}", f"{ANSI_BOLD}{color}")
+    print(f"{ts} {tag_text} {message}")
+
+
+def short_id(value: Optional[str]) -> str:
+    if not value:
+        return "-"
+    return value[-8:] if len(value) > 8 else value
+
+
+def is_tool_error_text(text: str) -> bool:
+    lowered = text.lower()
+    hints = [
+        "<tool_use_error>",
+        "error:",
+        "failed to",
+        "permission to use ",
+        "access denied",
+    ]
+    return any(hint in lowered for hint in hints)
+
+
+def print_assistant_message_realtime(
+    message: AssistantMessage,
+    tool_name_by_call_id: Dict[str, str],
+) -> None:
     for block in message.content:
         if isinstance(block, TextBlock) and block.text.strip():
-            if not printed_header:
-                print("\n[ASSISTANT]")
-                printed_header = True
-            print(preview_text(block.text.strip()))
+            text = preview_text(block.text.strip(), MAX_INLINE_OUTPUT_CHARS)
+            print_log_line("ASSIST", text, ANSI_GREEN)
         elif isinstance(block, ToolUseBlock):
-            if not printed_header:
-                print("\n[ASSISTANT]")
-                printed_header = True
-            args = preview_text(json.dumps(block.input, ensure_ascii=False))
-            print(f"[TOOL CALL] {block.name} {args}")
+            tool_name_by_call_id[block.id] = block.name
+            args = preview_text(
+                json.dumps(block.input, ensure_ascii=False, separators=(",", ":")),
+                MAX_INLINE_ARGS_CHARS,
+            )
+            print_log_line(
+                "TOOL CALL",
+                f"{block.name}#{short_id(block.id)} {args}",
+                ANSI_CYAN,
+            )
         elif isinstance(block, ToolResultBlock):
-            if not printed_header:
-                print("\n[ASSISTANT]")
-                printed_header = True
             content = block.content
             if isinstance(content, str):
-                text = preview_text(content.strip())
+                text = preview_text(content.strip(), MAX_INLINE_OUTPUT_CHARS)
             else:
-                text = preview_text(json.dumps(content, ensure_ascii=False))
-            print(f"[TOOL RESULT] {block.tool_use_id} error={bool(block.is_error)} {text}")
+                text = preview_text(
+                    json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+                    MAX_INLINE_OUTPUT_CHARS,
+                )
+            tool_name = tool_name_by_call_id.get(block.tool_use_id, "unknown_tool")
+            tag = "TOOL ERR" if bool(block.is_error) or is_tool_error_text(text) else "TOOL OUT"
+            color = ANSI_RED if tag == "TOOL ERR" else ANSI_YELLOW
+            print_log_line(
+                tag,
+                f"{tool_name}#{short_id(block.tool_use_id)} {text}",
+                color,
+            )
 
 
-def print_user_message_realtime(content_text: str, parent_tool_use_id: Optional[str]) -> None:
+def print_user_message_realtime(
+    content_text: str,
+    parent_tool_use_id: Optional[str],
+    tool_name_by_call_id: Dict[str, str],
+) -> None:
     if not content_text.strip():
         return
-    prefix = "[TOOL OUTPUT]" if parent_tool_use_id is not None else "[USER]"
-    print(f"\n{prefix}\n{preview_text(content_text.strip())}")
+    text = preview_text(content_text.strip(), MAX_INLINE_OUTPUT_CHARS)
+    if parent_tool_use_id is None:
+        print_log_line("USER", text, ANSI_MAGENTA)
+        return
+
+    tool_name = tool_name_by_call_id.get(parent_tool_use_id, "unknown_tool")
+    tag = "TOOL ERR" if is_tool_error_text(text) else "TOOL OUT"
+    color = ANSI_RED if tag == "TOOL ERR" else ANSI_YELLOW
+    print_log_line(tag, f"{tool_name}#{short_id(parent_tool_use_id)} {text}", color)
 
 
 def print_result_message_realtime(message: ResultMessage) -> None:
-    print(
-        "\n[RESULT] "
-        f"subtype={message.subtype} "
-        f"is_error={message.is_error} "
-        f"turns={message.num_turns} "
-        f"cost={message.total_cost_usd}"
+    color = ANSI_RED if message.is_error else ANSI_GREEN
+    print_log_line(
+        "RESULT",
+        (
+            f"subtype={message.subtype} "
+            f"is_error={message.is_error} "
+            f"turns={message.num_turns} "
+            f"cost={message.total_cost_usd}"
+        ),
+        color,
     )
     if message.result:
-        print(preview_text(message.result))
+        print_log_line("SUMMARY", preview_text(message.result, MAX_INLINE_OUTPUT_CHARS), color)
+
+
+def print_session_header(
+    model_name: str,
+    gateway_url: str,
+    permission_mode: str,
+    tool_call_mode: str,
+    allowed_tools: List[str],
+) -> None:
+    print("")
+    print(colorize("=" * 88, ANSI_DIM))
+    print_log_line(
+        "SESSION",
+        f"model={model_name} permission_mode={permission_mode} tool_call_mode={tool_call_mode}",
+        ANSI_MAGENTA,
+    )
+    print_log_line("GATEWAY", gateway_url, ANSI_MAGENTA)
+    print_log_line("MCP TOOLS", f"pre-authorized={len(allowed_tools)}", ANSI_MAGENTA)
+    print(colorize("=" * 88, ANSI_DIM))
 
 
 async def run_host_loop(args: argparse.Namespace) -> int:
@@ -463,6 +552,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
     saw_no_tool_call_turn = False
     session_id: Optional[str] = None
     result_message: Optional[ResultMessage] = None
+    tool_name_by_call_id: Dict[str, str] = {}
 
     try:
         os.makedirs(task_config.agent_workspace, exist_ok=True)
@@ -470,6 +560,13 @@ async def run_host_loop(args: argparse.Namespace) -> int:
             gateway_url=args.gateway_url,
             gateway_server_name=args.gateway_server_name,
             debug=args.debug,
+        )
+        print_session_header(
+            model_name=model_name,
+            gateway_url=args.gateway_url,
+            permission_mode=args.permission_mode,
+            tool_call_mode=args.tool_call_mode,
+            allowed_tools=allowed_tools,
         )
 
         options = ClaudeAgentOptions(
@@ -498,7 +595,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
         async for message in query(prompt=single_prompt_stream(task_config.task_str), options=options):
             if isinstance(message, AssistantMessage):
                 assistant_turns += 1
-                print_assistant_message_realtime(message)
+                print_assistant_message_realtime(message, tool_name_by_call_id)
                 entry, recent_tool_calls, no_tool_call_turn = parse_assistant_message(message)
                 messages.append(entry)
                 executed_tool_calls.extend(recent_tool_calls)
@@ -508,7 +605,11 @@ async def run_host_loop(args: argparse.Namespace) -> int:
 
             elif isinstance(message, UserMessage):
                 content_text, content_blocks = parse_user_message_content(message.content)
-                print_user_message_realtime(content_text, message.parent_tool_use_id)
+                print_user_message_realtime(
+                    content_text,
+                    message.parent_tool_use_id,
+                    tool_name_by_call_id,
+                )
                 entry: Dict[str, Any] = {"role": "user", "content": content_text}
                 if content_blocks is not None:
                     entry["content_blocks"] = content_blocks
