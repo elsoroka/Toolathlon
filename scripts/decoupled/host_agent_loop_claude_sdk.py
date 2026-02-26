@@ -33,6 +33,8 @@ from utils.roles.task_agent import TaskStatus
 from utils.status_manager import TaskStatusManager
 from utils.task_runner.runner import TaskRunner
 
+MAX_CONSOLE_PREVIEW_CHARS = 1200
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Host-side decoupled Claude SDK agent loop runner")
@@ -232,6 +234,57 @@ def write_traj_log(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, f, ensure_ascii=False)
 
 
+def preview_text(text: str, limit: int = MAX_CONSOLE_PREVIEW_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]} ... [truncated {len(text) - limit} chars]"
+
+
+def print_assistant_message_realtime(message: AssistantMessage) -> None:
+    printed_header = False
+    for block in message.content:
+        if isinstance(block, TextBlock) and block.text.strip():
+            if not printed_header:
+                print("\n[ASSISTANT]")
+                printed_header = True
+            print(preview_text(block.text.strip()))
+        elif isinstance(block, ToolUseBlock):
+            if not printed_header:
+                print("\n[ASSISTANT]")
+                printed_header = True
+            args = preview_text(json.dumps(block.input, ensure_ascii=False))
+            print(f"[TOOL CALL] {block.name} {args}")
+        elif isinstance(block, ToolResultBlock):
+            if not printed_header:
+                print("\n[ASSISTANT]")
+                printed_header = True
+            content = block.content
+            if isinstance(content, str):
+                text = preview_text(content.strip())
+            else:
+                text = preview_text(json.dumps(content, ensure_ascii=False))
+            print(f"[TOOL RESULT] {block.tool_use_id} error={bool(block.is_error)} {text}")
+
+
+def print_user_message_realtime(content_text: str, parent_tool_use_id: Optional[str]) -> None:
+    if not content_text.strip():
+        return
+    prefix = "[TOOL OUTPUT]" if parent_tool_use_id is not None else "[USER]"
+    print(f"\n{prefix}\n{preview_text(content_text.strip())}")
+
+
+def print_result_message_realtime(message: ResultMessage) -> None:
+    print(
+        "\n[RESULT] "
+        f"subtype={message.subtype} "
+        f"is_error={message.is_error} "
+        f"turns={message.num_turns} "
+        f"cost={message.total_cost_usd}"
+    )
+    if message.result:
+        print(preview_text(message.result))
+
+
 async def run_host_loop(args: argparse.Namespace) -> int:
     bundle = read_json_file(args.bundle_file)
     setup_proxy(args.with_proxy)
@@ -299,6 +352,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
         async for message in query(prompt=single_prompt_stream(task_config.task_str), options=options):
             if isinstance(message, AssistantMessage):
                 assistant_turns += 1
+                print_assistant_message_realtime(message)
                 entry, recent_tool_calls, no_tool_call_turn = parse_assistant_message(message)
                 messages.append(entry)
                 executed_tool_calls.extend(recent_tool_calls)
@@ -308,6 +362,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
 
             elif isinstance(message, UserMessage):
                 content_text, content_blocks = parse_user_message_content(message.content)
+                print_user_message_realtime(content_text, message.parent_tool_use_id)
                 entry: Dict[str, Any] = {"role": "user", "content": content_text}
                 if content_blocks is not None:
                     entry["content_blocks"] = content_blocks
@@ -323,6 +378,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
             elif isinstance(message, ResultMessage):
                 result_message = message
                 session_id = message.session_id or session_id
+                print_result_message_realtime(message)
 
             elif isinstance(message, StreamEvent):
                 if args.debug and session_id is None:
