@@ -1349,7 +1349,13 @@ API_MAPPINGS = {
         context_window=256000,
         openrouter_config={"provider": {"only": ["moonshotai"]}}
     ),
-
+    'kimi-k2.5': Dict(
+        api_model={"kimi_official": "kimi-k2.5"},
+        price=[0.548/1000, 3.05/1000],
+        concurrency=32,
+        context_window=256000,
+        openrouter_config={"provider": {"only": ["moonshotai"]}}
+    ),
     'glm-4.6': Dict(
         api_model={"openrouter": "z-ai/glm-4.6",
                    "zai_official": "glm-4.6"},
