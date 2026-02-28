@@ -166,6 +166,23 @@ bash scripts/run_single_containerized.sh finalpool/{taskname} quickstart {your_d
 
 *Note: There are also other arguments in the script, please take a look at the head of it if for more information. The model name should be exactly the same as the raw name from the provider if you use **unified** model provider, otherwise, please use the alias we preset, see `utils/api_model/model_provider.py` for more details.
 
+### Decoupled Agent Loop
+
+We also provide a decoupled mode where the task environment stays in the container, but the agent loop runs on the host with a selectable framework. This is the recommended entrypoint if you want to swap the host-side agent scaffold without rebuilding the task environment.
+
+Use:
+
+```bash
+bash scripts/run_single_decoupled.sh finalpool/{taskname} quickstart {your_dump_path} {model-name} unified 100 scripts/formal_run_v0.json lockon0927/toolathlon-task-image:1016beta {agent_framework}
+```
+
+Supported `agent_framework` values:
+
+- `toolathlon_default`
+- `claude_agent_sdk`
+
+See [DECOUPLED_AGENT_LOOP.md](DECOUPLED_AGENT_LOOP.md) for the architecture, configuration, and examples.
+
 ## Evaluation in Parallel with Task Isolation
 
 <!-- To ensure that the execution of different tasks does not interfere with each other, we use containerization to run each task in an isolated environment. This also makes it possible to run tasks in parallel, greatly accelerating evaluation speed. -->
