@@ -117,16 +117,26 @@ CONTAINER_NAME="${INSTANCE_PREFIX}toolathlon-${SAFE_TASK_NAME}-${TIMESTAMP}"
 
 echo "Container name: $CONTAINER_NAME"
 
-# --- BEGIN: Detect and propagate TOOLATHLON_OPENAI env vars from host to container ---
 EXTRA_ENV_ARGS=()
-if [ ! -z "${TOOLATHLON_OPENAI_BASE_URL+x}" ]; then
-    EXTRA_ENV_ARGS+=("-e" "TOOLATHLON_OPENAI_BASE_URL=${TOOLATHLON_OPENAI_BASE_URL}")
-    echo "Detected host TOOLATHLON_OPENAI_BASE_URL, will pass into container"
-fi
+USE_UNIFIED_MODEL_ENV=true
+case "$host_loop_backend" in
+    claude|claude_sdk|claude_agent_sdk)
+        USE_UNIFIED_MODEL_ENV=false
+        ;;
+esac
 
-if [ ! -z "${TOOLATHLON_OPENAI_API_KEY+x}" ]; then
-    EXTRA_ENV_ARGS+=("-e" "TOOLATHLON_OPENAI_API_KEY=${TOOLATHLON_OPENAI_API_KEY}")
-    echo "Detected host TOOLATHLON_OPENAI_API_KEY, will pass into container"
+if [ "$USE_UNIFIED_MODEL_ENV" = true ]; then
+    if [ ! -z "${TOOLATHLON_OPENAI_BASE_URL+x}" ]; then
+        EXTRA_ENV_ARGS+=("-e" "TOOLATHLON_OPENAI_BASE_URL=${TOOLATHLON_OPENAI_BASE_URL}")
+        echo "Detected host TOOLATHLON_OPENAI_BASE_URL, will pass into container"
+    fi
+
+    if [ ! -z "${TOOLATHLON_OPENAI_API_KEY+x}" ]; then
+        EXTRA_ENV_ARGS+=("-e" "TOOLATHLON_OPENAI_API_KEY=${TOOLATHLON_OPENAI_API_KEY}")
+        echo "Detected host TOOLATHLON_OPENAI_API_KEY, will pass into container"
+    fi
+else
+    echo "Skipping TOOLATHLON_OPENAI_* passthrough for Claude SDK host loop"
 fi
 
 # Detect TOOLATHLON_MODEL_PARAMS_FILE - will copy file and set container path later
@@ -139,8 +149,6 @@ if [ ! -z "${TOOLATHLON_MODEL_PARAMS_FILE+x}" ] && [ -f "${TOOLATHLON_MODEL_PARA
     echo "Detected host TOOLATHLON_MODEL_PARAMS_FILE: ${HOST_MODEL_PARAMS_FILE}"
     echo "Will copy to container as: ${CONTAINER_MODEL_PARAMS_FILE}"
 fi
-# --- END: Detect and propagate TOOLATHLON_OPENAI env vars ---
-
 # Cleanup function
 cleanup() {
     echo ""

@@ -12,8 +12,12 @@ from scripts.decoupled.host_agent_loop_claude_sdk import (
     build_allowed_mcp_tool_names,
     build_runtime_system_prompt,
     decide_task_status,
+    get_env_optional_int,
+    has_claude_sdk_auth,
+    is_claude_code_builtin_model_name,
     parse_assistant_message,
     parse_user_message_content,
+    resolve_claude_sdk_model,
     resolve_claude_sdk_env,
 )
 from utils.roles.task_agent import TaskStatus
@@ -36,33 +40,86 @@ class HostAgentLoopClaudeSDKTests(unittest.TestCase):
     def test_resolve_claude_sdk_env_maps_auth_token(self) -> None:
         resolved = resolve_claude_sdk_env(
             {
-                "TOOLATHLON_OPENAI_BASE_URL": "https://api.example.com",
+                "ANTHROPIC_BASE_URL": "https://api.example.com",
                 "ANTHROPIC_AUTH_TOKEN": "token-a",
             }
         )
         self.assertEqual(resolved["ANTHROPIC_BASE_URL"], "https://api.example.com")
-        self.assertEqual(resolved["ANTHROPIC_API_KEY"], "token-a")
+        self.assertEqual(resolved["ANTHROPIC_AUTH_TOKEN"], "token-a")
 
     def test_resolve_claude_sdk_env_prefers_api_key(self) -> None:
         resolved = resolve_claude_sdk_env(
             {
-                "TOOLATHLON_OPENAI_API_KEY": "token-api",
+                "ANTHROPIC_API_KEY": "token-api",
                 "ANTHROPIC_AUTH_TOKEN": "token-auth",
             }
         )
         self.assertEqual(resolved["ANTHROPIC_API_KEY"], "token-api")
+        self.assertEqual(resolved["ANTHROPIC_AUTH_TOKEN"], "token-auth")
+
+    def test_resolve_claude_sdk_env_preserves_empty_api_key(self) -> None:
+        resolved = resolve_claude_sdk_env(
+            {
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_AUTH_TOKEN": "token-auth",
+            }
+        )
+        self.assertIn("ANTHROPIC_API_KEY", resolved)
+        self.assertEqual(resolved["ANTHROPIC_API_KEY"], "")
+        self.assertEqual(resolved["ANTHROPIC_AUTH_TOKEN"], "token-auth")
+
+    def test_resolve_claude_sdk_env_ignores_toolathlon_openai_env(self) -> None:
+        resolved = resolve_claude_sdk_env(
+            {
+                "TOOLATHLON_OPENAI_BASE_URL": "https://ignored.example.com",
+                "TOOLATHLON_OPENAI_API_KEY": "ignored-token",
+            }
+        )
+        self.assertEqual(resolved, {})
 
     def test_resolve_claude_sdk_env_prefers_overrides(self) -> None:
         resolved = resolve_claude_sdk_env(
             {
-                "TOOLATHLON_OPENAI_BASE_URL": "https://old.example.com",
-                "TOOLATHLON_OPENAI_API_KEY": "old-token",
+                "ANTHROPIC_BASE_URL": "https://old.example.com",
+                "ANTHROPIC_API_KEY": "old-token",
             },
             base_url_override="https://new.example.com",
             api_key_override="new-token",
         )
         self.assertEqual(resolved["ANTHROPIC_BASE_URL"], "https://new.example.com")
         self.assertEqual(resolved["ANTHROPIC_API_KEY"], "new-token")
+
+    def test_is_claude_code_builtin_model_name(self) -> None:
+        self.assertTrue(is_claude_code_builtin_model_name("sonnet"))
+        self.assertTrue(is_claude_code_builtin_model_name("claude-sonnet-4-6"))
+        self.assertTrue(
+            is_claude_code_builtin_model_name("anthropic.claude-sonnet-4-5")
+        )
+        self.assertFalse(is_claude_code_builtin_model_name("google/gemini-3-flash-preview"))
+
+    def test_resolve_claude_sdk_model_maps_custom_model_to_sonnet(self) -> None:
+        cli_model, env_updates, requested = resolve_claude_sdk_model(
+            "google/gemini-3-flash-preview",
+        )
+        self.assertEqual(cli_model, "sonnet")
+        self.assertEqual(
+            env_updates,
+            {"ANTHROPIC_DEFAULT_SONNET_MODEL": "google/gemini-3-flash-preview"},
+        )
+        self.assertEqual(requested, "google/gemini-3-flash-preview")
+
+    def test_resolve_claude_sdk_model_keeps_builtin_model(self) -> None:
+        cli_model, env_updates, requested = resolve_claude_sdk_model("claude-sonnet-4-6")
+        self.assertEqual(cli_model, "claude-sonnet-4-6")
+        self.assertEqual(env_updates, {})
+        self.assertIsNone(requested)
+
+    def test_has_claude_sdk_auth_accepts_auth_token_only(self) -> None:
+        self.assertTrue(has_claude_sdk_auth({"ANTHROPIC_AUTH_TOKEN": "token"}))
+        self.assertFalse(has_claude_sdk_auth({"ANTHROPIC_API_KEY": ""}))
+
+    def test_get_env_optional_int_returns_none_for_empty(self) -> None:
+        self.assertIsNone(get_env_optional_int("NOT_SET_INT_ENV"))
 
     def test_parse_assistant_message_extracts_tool_calls(self) -> None:
         message = AssistantMessage(

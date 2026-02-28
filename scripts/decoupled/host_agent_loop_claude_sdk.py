@@ -48,6 +48,15 @@ ANSI_RED = "\033[31m"
 ANSI_MAGENTA = "\033[35m"
 ANSI_BOLD = "\033[1m"
 
+CLAUDE_CODE_MODEL_ALIASES = {"default", "sonnet", "opus", "haiku", "opusplan"}
+
+
+def get_env_optional_int(name: str) -> Optional[int]:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return int(value)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Host-side decoupled Claude SDK agent loop runner")
@@ -69,7 +78,7 @@ def parse_args() -> argparse.Namespace:
         choices=["default", "acceptEdits", "dontAsk", "plan", "bypassPermissions"],
         help="Claude permission mode.",
     )
-    parser.add_argument("--max_turns", type=int, default=None)
+    parser.add_argument("--max_turns", type=int, default=get_env_optional_int("TOOLATHLON_MAX_TURNS_PER_TASK"))
     parser.add_argument("--with_proxy", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--allow_resume", action="store_true")
@@ -84,24 +93,77 @@ def resolve_claude_sdk_env(
     env = source_env if source_env is not None else os.environ
     resolved: Dict[str, str] = {}
 
-    base_url = (
-        base_url_override
-        or env.get("TOOLATHLON_OPENAI_BASE_URL")
-        or env.get("ANTHROPIC_BASE_URL")
-    )
+    # Claude SDK backend intentionally does not read TOOLATHLON_OPENAI_*.
+    base_url = base_url_override or env.get("ANTHROPIC_BASE_URL")
     if base_url:
         resolved["ANTHROPIC_BASE_URL"] = base_url
 
-    api_key = (
-        api_key_override
-        or env.get("TOOLATHLON_OPENAI_API_KEY")
-        or env.get("ANTHROPIC_API_KEY")
-        or env.get("ANTHROPIC_AUTH_TOKEN")
-    )
-    if api_key:
-        resolved["ANTHROPIC_API_KEY"] = api_key
+    # Preserve OpenRouter-style auth envs as-is:
+    # ANTHROPIC_AUTH_TOKEN carries the real token, while ANTHROPIC_API_KEY may be an empty string.
+    if api_key_override is not None:
+        resolved["ANTHROPIC_API_KEY"] = api_key_override
+    elif "ANTHROPIC_API_KEY" in env:
+        resolved["ANTHROPIC_API_KEY"] = env.get("ANTHROPIC_API_KEY", "")
+
+    auth_token = env.get("ANTHROPIC_AUTH_TOKEN")
+    if auth_token:
+        resolved["ANTHROPIC_AUTH_TOKEN"] = auth_token
 
     return resolved
+
+
+def is_claude_code_builtin_model_name(model_name: str) -> bool:
+    normalized = model_name.strip().lower()
+    if not normalized:
+        return False
+    if normalized.endswith("[1m]"):
+        normalized = normalized[:-4]
+    return (
+        normalized in CLAUDE_CODE_MODEL_ALIASES
+        or normalized.startswith("claude-")
+        or normalized.startswith("anthropic.")
+        or normalized.startswith("us.anthropic.")
+        or normalized.startswith("eu.anthropic.")
+        or normalized.startswith("apac.anthropic.")
+    )
+
+
+def resolve_claude_sdk_model(
+    requested_model: str,
+) -> Tuple[str, Dict[str, str], Optional[str]]:
+    normalized = requested_model.strip()
+
+    if is_claude_code_builtin_model_name(normalized):
+        return normalized, {}, None
+
+    return "sonnet", {"ANTHROPIC_DEFAULT_SONNET_MODEL": normalized}, normalized
+
+
+def has_claude_sdk_auth(env: Dict[str, str]) -> bool:
+    if env.get("ANTHROPIC_AUTH_TOKEN"):
+        return True
+    return bool(env.get("ANTHROPIC_API_KEY"))
+
+
+def format_session_model_label(cli_model_name: str, requested_model_name: Optional[str]) -> str:
+    if requested_model_name and requested_model_name != cli_model_name:
+        return f"{cli_model_name} (requested: {requested_model_name})"
+    return cli_model_name
+
+
+def maybe_print_model_mapping(cli_model_name: str, requested_model_name: Optional[str]) -> None:
+    if requested_model_name and requested_model_name != cli_model_name:
+        print_log_line(
+            "MODEL MAP",
+            f"{requested_model_name} -> {cli_model_name} via ANTHROPIC_DEFAULT_SONNET_MODEL",
+            ANSI_MAGENTA,
+        )
+
+
+def merge_env_vars(base_env: Dict[str, str], extra_env: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(base_env)
+    merged.update(extra_env)
+    return merged
 
 
 def serialize_content_block(block: ContentBlock) -> Dict[str, Any]:
@@ -526,13 +588,17 @@ async def run_host_loop(args: argparse.Namespace) -> int:
     if max_turns is None:
         max_turns = int(bundle.get("max_steps_under_single_turn_mode") or task_config.max_steps_under_single_turn_mode or 100)
 
-    model_name = args.model or agent_config.model.short_name
+    requested_model_name = args.model or agent_config.model.short_name
     sdk_env = resolve_claude_sdk_env(
         base_url_override=args.base_url,
         api_key_override=args.api_key,
     )
-    if "ANTHROPIC_API_KEY" not in sdk_env:
-        raise RuntimeError("Missing ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) for Claude SDK host loop")
+    model_name, model_env_updates, custom_model_name = resolve_claude_sdk_model(
+        requested_model_name,
+    )
+    sdk_env = merge_env_vars(sdk_env, model_env_updates)
+    if not has_claude_sdk_auth(sdk_env):
+        raise RuntimeError("Missing ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for Claude SDK host loop")
 
     status_manager = TaskStatusManager(task_config.task_root)
     status_manager.update_preprocess("done")
@@ -561,8 +627,9 @@ async def run_host_loop(args: argparse.Namespace) -> int:
             gateway_server_name=args.gateway_server_name,
             debug=args.debug,
         )
+        maybe_print_model_mapping(model_name, custom_model_name)
         print_session_header(
-            model_name=model_name,
+            model_name=format_session_model_label(model_name, custom_model_name),
             gateway_url=args.gateway_url,
             permission_mode=args.permission_mode,
             tool_call_mode=args.tool_call_mode,
