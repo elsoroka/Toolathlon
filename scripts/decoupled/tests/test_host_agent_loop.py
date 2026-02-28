@@ -3,12 +3,19 @@ import tempfile
 import unittest
 
 import yaml
+from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_output_message import ResponseOutputMessage
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
+from openai.types.responses.response_output_text import ResponseOutputText
 
 from scripts.decoupled.host_agent_loop import (
     build_gateway_runtime_mcp_config,
     decoupled_termination_checker,
     expand_stop_tool_names,
+    extract_assistant_console_entries,
     filter_local_tools,
+    render_run_items_to_console_events,
 )
 
 
@@ -78,6 +85,70 @@ class HostAgentLoopHelperTests(unittest.TestCase):
             agent_stop_tools=[],
         )
         self.assertTrue(should_stop)
+
+    def test_extract_assistant_console_entries_reads_text_and_refusal(self) -> None:
+        raw_message = ResponseOutputMessage(
+            id="msg_1",
+            content=[
+                ResponseOutputText(text="hello", type="output_text", annotations=[]),
+                ResponseOutputRefusal(refusal="cannot do that", type="refusal"),
+            ],
+            role="assistant",
+            status="completed",
+            type="message",
+        )
+
+        entries = extract_assistant_console_entries(raw_message)
+
+        self.assertEqual(entries[0][0], "ASSIST")
+        self.assertEqual(entries[0][1], "hello")
+        self.assertEqual(entries[1][0], "ASSIST")
+        self.assertEqual(entries[1][1], "cannot do that")
+
+    def test_render_run_items_to_console_events_renders_tool_sequence(self) -> None:
+        items = [
+            MessageOutputItem(
+                agent=None,
+                raw_item=ResponseOutputMessage(
+                    id="msg_1",
+                    content=[
+                        ResponseOutputText(text="Looking it up", type="output_text", annotations=[])
+                    ],
+                    role="assistant",
+                    status="completed",
+                    type="message",
+                ),
+            ),
+            ToolCallItem(
+                agent=None,
+                raw_item=ResponseFunctionToolCall(
+                    arguments='{"keyword":"Alita"}',
+                    call_id="call_1",
+                    name="search_arxiv",
+                    type="function_call",
+                ),
+            ),
+            ToolCallOutputItem(
+                agent=None,
+                raw_item={
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "found paper",
+                },
+                output="found paper",
+            ),
+        ]
+
+        events = render_run_items_to_console_events(items)
+
+        self.assertEqual(
+            [event[0] for event in events],
+            ["ASSIST", "TOOL CALL", "TOOL OUT"],
+        )
+        self.assertIn("Looking it up", events[0][1])
+        self.assertIn("search_arxiv#call_1", events[1][1])
+        self.assertIn('{"keyword":"Alita"}', events[1][1])
+        self.assertIn("search_arxiv#call_1 found paper", events[2][1])
 
 
 if __name__ == "__main__":
