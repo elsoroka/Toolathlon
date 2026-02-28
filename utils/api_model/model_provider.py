@@ -424,6 +424,40 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                 'use_parallel_tool_calls': True
             }
 
+    @staticmethod
+    def _usage_from_chat_completion(response: ChatCompletion) -> Usage:
+        if response.usage:
+            return Usage(
+                requests=1,
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
+        return Usage()
+
+    @staticmethod
+    def _usage_from_response(response: Response) -> Usage:
+        if response.usage:
+            return Usage(
+                requests=1,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
+        return Usage()
+
+    async def _collect_streamed_response(
+        self,
+        response: Response,
+        stream: AsyncStream[ChatCompletionChunk],
+    ) -> Response:
+        final_response: Response | None = None
+        async for event in ChatCmplStreamHandler.handle_stream(response, stream):
+            if event.type == "response.completed":
+                final_response = event.response
+
+        return final_response or response
+
     async def _fetch_response(
         self,
         system_instructions: str | None,
@@ -608,42 +642,54 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
             message: ChatCompletionMessage | None = None
             first_choice: Choice | None = None
 
-            if response.choices and len(response.choices) > 0:
-                first_choice = response.choices[0]
-                message = first_choice.message
+            if isinstance(response, tuple):
+                initial_response, stream = response
+                final_response = await self._collect_streamed_response(initial_response, stream)
+                usage = self._usage_from_response(final_response)
+                items = final_response.output
 
-            if _debug.DONT_LOG_MODEL_DATA:
-                logger.debug("Received model response")
-            else:
-                if message is not None:
+                if _debug.DONT_LOG_MODEL_DATA:
+                    logger.debug("Received model response")
+                else:
                     logger.debug(
                         "LLM resp:\n%s\n",
-                        json.dumps(message.model_dump(), indent=2, ensure_ascii=False),
+                        json.dumps(final_response.model_dump(), indent=2, ensure_ascii=False),
                     )
-                else:
-                    finish_reason = first_choice.finish_reason if first_choice else "-"
-                    logger.debug(f"LLM resp had no message. finish_reason: {finish_reason}")
 
-            usage = (
-                Usage(
-                    requests=1,
-                    input_tokens=response.usage.prompt_tokens,
-                    output_tokens=response.usage.completion_tokens,
-                    total_tokens=response.usage.total_tokens,
+                if tracing.include_data():
+                    span_generation.span_data.output = [final_response.model_dump()]
+            else:
+                if response.choices and len(response.choices) > 0:
+                    first_choice = response.choices[0]
+                    message = first_choice.message
+
+                if _debug.DONT_LOG_MODEL_DATA:
+                    logger.debug("Received model response")
+                else:
+                    if message is not None:
+                        logger.debug(
+                            "LLM resp:\n%s\n",
+                            json.dumps(message.model_dump(), indent=2, ensure_ascii=False),
+                        )
+                    else:
+                        finish_reason = first_choice.finish_reason if first_choice else "-"
+                        logger.debug(f"LLM resp had no message. finish_reason: {finish_reason}")
+
+                usage = self._usage_from_chat_completion(response)
+                if tracing.include_data():
+                    span_generation.span_data.output = (
+                        [message.model_dump()] if message is not None else []
+                    )
+                items = (
+                    ConverterWithExplicitReasoningContent.message_to_output_items(message)
+                    if message is not None
+                    else []
                 )
-                if response.usage
-                else Usage()
-            )
-            if tracing.include_data():
-                span_generation.span_data.output = (
-                    [message.model_dump()] if message is not None else []
-                )
+
             span_generation.span_data.usage = {
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
             }
-
-            items = ConverterWithExplicitReasoningContent.message_to_output_items(message) if message is not None else []
 
             return ModelResponse(
                 output=items,
