@@ -4,7 +4,15 @@
 # preprocess + gateway in container, agent loop on host, eval in container.
 # Usage:
 #   ./run_single_decoupled.sh <task_dir> <runmode> <dump_path> <modelname> \
-#     [provider] [maxstep] [eval_config] [image_name] [gateway_port] [host_loop_backend] [tool_call_mode]
+#     [provider] [maxstep] [eval_config] [image_name] [agent_framework] [gateway_port]
+#
+# Supported agent frameworks:
+#   - toolathlon_default
+#   - claude_agent_sdk
+#
+# Legacy compatibility:
+#   This script also accepts the old positional layout:
+#   [gateway_port] [host_loop_backend] [tool_call_mode]
 
 #### If you want to use the unified model provider, 
 # but do not want to explicitly export these environment variables in your shell, 
@@ -25,9 +33,78 @@ provider=${5:-"unified"}
 maxstep=${6:-"100"}
 eval_config=${7:-"scripts/formal_run_v0.json"}
 image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
-gateway_port=${9:-""}
-host_loop_backend=${10:-"openai"}
-tool_call_mode=${11:-"parallel"}
+arg9=${9:-""}
+arg10=${10:-""}
+arg11=${11:-""}
+
+agent_framework="${TOOLATHLON_AGENT_FRAMEWORK:-toolathlon_default}"
+gateway_port=""
+host_loop_backend=""
+tool_call_mode="parallel"
+
+resolve_agent_framework() {
+    case "$1" in
+        toolathlon_default|default|openai|openai_agents)
+            echo "toolathlon_default"
+            ;;
+        claude_agent_sdk|claude_sdk|claude)
+            echo "claude_agent_sdk"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+resolve_host_loop_backend() {
+    case "$1" in
+        toolathlon_default)
+            echo "openai"
+            ;;
+        claude_agent_sdk)
+            echo "claude_sdk"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+if resolved_framework=$(resolve_agent_framework "$arg9"); then
+    agent_framework="$resolved_framework"
+    gateway_port="$arg10"
+elif [ -z "$arg9" ]; then
+    gateway_port="$arg10"
+else
+    # Legacy positional layout:
+    #   [gateway_port] [host_loop_backend] [tool_call_mode]
+    gateway_port="$arg9"
+    host_loop_backend="${arg10:-openai}"
+    tool_call_mode="${arg11:-parallel}"
+    case "$host_loop_backend" in
+        openai|openai_agents)
+            agent_framework="toolathlon_default"
+            host_loop_backend="openai"
+            ;;
+        claude|claude_sdk|claude_agent_sdk)
+            agent_framework="claude_agent_sdk"
+            host_loop_backend="claude_sdk"
+            ;;
+        *)
+            echo "Unsupported legacy host_loop_backend: $host_loop_backend"
+            echo "Supported values: openai, claude_sdk"
+            exit 1
+            ;;
+    esac
+fi
+
+if [ -z "$host_loop_backend" ]; then
+    host_loop_backend=$(resolve_host_loop_backend "$agent_framework") || {
+        echo "Unsupported agent_framework: $agent_framework"
+        echo "Supported values: toolathlon_default, claude_agent_sdk"
+        exit 1
+    }
+fi
 
 taskdomain=${task_dir_arg%/*}
 taskname=${task_dir_arg#*/}
@@ -42,8 +119,8 @@ eval_log_path="${dump_path}/${taskdomain}/${taskname}/eval.log"
 output_folder="${dump_path}/${taskdomain}/${taskname}"
 
 if [ -z "$task_dir_arg" ] || [ -z "$runmode" ] || [ -z "$modelname" ]; then
-    echo "Usage: $0 <task_dir> <runmode> <modelname>"
-    echo "Example: $0 debug/debug-task testrun testmodel"
+    echo "Usage: $0 <task_dir> <runmode> <dump_path> <modelname> [provider] [maxstep] [eval_config] [image_name] [agent_framework] [gateway_port]"
+    echo "Example: $0 finalpool/find-alita-paper quickstart /tmp/dumps anthropic/claude-sonnet-4.5 unified 100 scripts/formal_run_v0.json lockon0927/toolathlon-task-image:1016beta toolathlon_default"
     exit 1
 fi
 
@@ -56,12 +133,21 @@ echo "Project root: $PROJECT_ROOT"
 echo "Task directory: $task_dir_arg"
 echo "Runmode: $runmode"
 echo "Modelname: $modelname"
+echo "Agent framework: $agent_framework"
 echo "Host loop backend: $host_loop_backend"
 echo "Tool call mode: $tool_call_mode"
 echo "Container log: $container_log_path"
 echo "Run log: $run_log_path"
 echo "Output folder: $output_folder"
 echo "Dump path: $dump_path"
+
+if [ "$host_loop_backend" = "claude_sdk" ]; then
+    echo "Claude tool call mode: parallel"
+    echo "Claude permission mode: default"
+    if [ -n "${TOOLATHLON_MAX_TURNS_PER_TASK:-}" ]; then
+        echo "Task max turns override: ${TOOLATHLON_MAX_TURNS_PER_TASK}"
+    fi
+fi
 
 if [ -z "$gateway_port" ]; then
     gateway_port=$(uv run python -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()")
