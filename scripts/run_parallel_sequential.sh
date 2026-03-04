@@ -3,6 +3,10 @@ TASK_IMAGE=lockon0927/toolathlon-task-image:1016beta # this is the image we use 
 DUMP_PATH="./dumps_finalexp" # you must have this ./ prefix or use absolute path
 poste_configure_dovecot=true # or `false` if your Linux distribution does not need to configure Dovecot to allow plaintext auth
 WROKERS=10
+RUNNER="containerized"
+RUNMODE="normal"
+AGENT_FRAMEWORK=""
+CONFIG_FILE=""
 
 #### If you want to use the unified model provider, 
 # but do not want to explicitly export these environment variables in your shell, 
@@ -52,6 +56,6 @@ for attempt in {2..3}; do
         STORED_MODEL_SHORT_NAME=$(echo "$MODEL_SHORT_NAME" | sed 's|/|_|g')
 
         bash global_preparation/deploy_containers.sh $poste_configure_dovecot
-        bash scripts/run_parallel.sh "$MODEL_SHORT_NAME" "$DUMP_PATH/${STORED_MODEL_SHORT_NAME}_${attempt}" "$PROVIDER" "$WROKERS" "$TASK_IMAGE"
+        bash scripts/run_parallel.sh "$MODEL_SHORT_NAME" "$DUMP_PATH/${STORED_MODEL_SHORT_NAME}_${attempt}" "$PROVIDER" "$WROKERS" "$TASK_IMAGE" "$CONFIG_FILE" "$RUNNER" "$RUNMODE" "$AGENT_FRAMEWORK"
     done
 done

@@ -29,6 +29,10 @@ echo "Using temperature ${TEMPERATURE} for agent model."
 TOP_P="1"
 MAX_TOKENS="8192"
 IMAGE_NAME=${5:-"lockon0927/toolathlon-task-image:1016beta"}  # Docker image to use
+CONFIG_FILE_ARG=${6:-""}
+RUNNER=${7:-"containerized"}
+RUNMODE=${8:-"normal"}
+AGENT_FRAMEWORK=${9:-""}
 
 mkdir -p $DUMP_PATH
 
@@ -40,7 +44,7 @@ TASK_LIST="${TASK_LIST:-}"
 # Generate temporary config file with random suffix to avoid conflicts
 RANDOM_SUFFIX=$(date +%s)_$$_$(shuf -i 1000-9999 -n 1)
 mkdir -p scripts/temp_configs
-CONFIG_FILE=${6:-"scripts/temp_configs/temp_parallel_config_${RANDOM_SUFFIX}.json"}
+CONFIG_FILE=${CONFIG_FILE_ARG:-"scripts/temp_configs/temp_parallel_config_${RANDOM_SUFFIX}.json"}
 
 # if CONFIG_FILE DOES NOT exist, we will generate it; otherwise we just use it as is
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -93,7 +97,15 @@ else
 fi
 
 # Build command arguments
-ARGS="--tasks_folder $TASKS_FOLDER --tag $TAG --model_short_name $MODEL_NAME --provider $MODEL_PROVIDER --maxstep $MAX_STEPS --workers $WORKERS --timeout $TIMEOUT --dump_path $DUMP_PATH --eval_config $CONFIG_FILE --image_name $IMAGE_NAME"
+ARGS="--tasks_folder $TASKS_FOLDER --tag $TAG --model_short_name $MODEL_NAME --provider $MODEL_PROVIDER --maxstep $MAX_STEPS --workers $WORKERS --timeout $TIMEOUT --dump_path $DUMP_PATH --eval_config $CONFIG_FILE --image_name $IMAGE_NAME --runner $RUNNER"
+
+if [ "$RUNNER" = "decoupled" ]; then
+    ARGS="$ARGS --runmode $RUNMODE"
+fi
+
+if [ ! -z "$AGENT_FRAMEWORK" ]; then
+    ARGS="$ARGS --agent_framework $AGENT_FRAMEWORK"
+fi
 
 # Add optional task list if specified
 if [ ! -z "$TASK_LIST" ]; then
@@ -108,6 +120,13 @@ echo "🌡️  Temperature: $TEMPERATURE"
 echo "📁 Dump path: $DUMP_PATH"
 echo "🐳 Docker image: $IMAGE_NAME"
 echo "⚙️  Config file: $CONFIG_FILE"
+echo "🏃 Runner: $RUNNER"
+if [ "$RUNNER" = "decoupled" ]; then
+    echo "🎛️  Run mode: $RUNMODE"
+fi
+if [ ! -z "$AGENT_FRAMEWORK" ]; then
+    echo "🧩 Agent framework: $AGENT_FRAMEWORK"
+fi
 if [ ! -z "$TASK_LIST" ]; then
     echo "📋 Task list filter: $TASK_LIST"
 fi

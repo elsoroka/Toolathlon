@@ -608,7 +608,7 @@ case "$host_loop_backend" in
             uv run python -m scripts.decoupled.host_agent_loop
             --bundle_file "$HOST_BUNDLE_FILE"
             --gateway_url "http://127.0.0.1:${gateway_port}/sse"
-            --gateway_server_name "container_gateway"
+            --gateway_server_name "gw"
             --debug
         )
         ;;
@@ -617,7 +617,7 @@ case "$host_loop_backend" in
             uv run python -m scripts.decoupled.host_agent_loop_claude_sdk
             --bundle_file "$HOST_BUNDLE_FILE"
             --gateway_url "http://127.0.0.1:${gateway_port}/sse"
-            --gateway_server_name "container_gateway"
+            --gateway_server_name "gw"
             --model "$modelname"
             --tool_call_mode "$tool_call_mode"
             --debug

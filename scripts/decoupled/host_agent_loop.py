@@ -284,7 +284,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Host-side decoupled agent loop runner")
     parser.add_argument("--bundle_file", required=True)
     parser.add_argument("--gateway_url", required=True, help="SSE endpoint, e.g. http://127.0.0.1:10086/sse")
-    parser.add_argument("--gateway_server_name", default="container_gateway")
+    parser.add_argument("--gateway_server_name", default="gw")
     parser.add_argument("--with_proxy", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--allow_resume", action="store_true")

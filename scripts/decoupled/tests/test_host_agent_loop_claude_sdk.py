@@ -26,14 +26,14 @@ from utils.roles.task_agent import TaskStatus
 class HostAgentLoopClaudeSDKTests(unittest.TestCase):
     def test_build_allowed_mcp_tool_names(self) -> None:
         names = build_allowed_mcp_tool_names(
-            gateway_server_name="container_gateway",
+            gateway_server_name="gw",
             tool_names=["fetch_json", "local-claim_done", "fetch_json"],
         )
         self.assertEqual(
             names,
             [
-                "mcp__container_gateway__fetch_json",
-                "mcp__container_gateway__local-claim_done",
+                "mcp__gw__fetch_json",
+                "mcp__gw__local-claim_done",
             ],
         )
 

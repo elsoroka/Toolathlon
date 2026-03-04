@@ -113,8 +113,13 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._records: Dict[str, ToolRecord] = {}
 
-    def _allocate_name(self, base_name: str, server_name: Optional[str]) -> str:
-        if base_name not in self._records:
+    def _allocate_name(
+        self,
+        base_name: str,
+        server_name: Optional[str],
+        always_prefix: bool = True,
+    ) -> str:
+        if not always_prefix and base_name not in self._records:
             return base_name
 
         prefix = server_name or "tool"
@@ -139,7 +144,7 @@ class ToolRegistry:
             )
 
     def add_claim_done(self) -> None:
-        name = self._allocate_name("local-claim_done", "local")
+        name = self._allocate_name("local-claim_done", "local", always_prefix=False)
         self._records[name] = ToolRecord(
             exposed_name=name,
             backend_type="local",

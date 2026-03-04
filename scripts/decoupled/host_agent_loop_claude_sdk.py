@@ -38,6 +38,8 @@ from utils.task_runner.runner import TaskRunner
 MAX_CONSOLE_PREVIEW_CHARS = 1200
 MAX_INLINE_ARGS_CHARS = 420
 MAX_INLINE_OUTPUT_CHARS = 500
+GATEWAY_CONNECTIVITY_ERROR_TEXT = "Unable to connect. Is the computer able to access the url?"
+MAX_CONSECUTIVE_GATEWAY_CONNECTIVITY_ERRORS = 2
 
 ANSI_RESET = "\033[0m"
 ANSI_DIM = "\033[2m"
@@ -62,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Host-side decoupled Claude SDK agent loop runner")
     parser.add_argument("--bundle_file", required=True)
     parser.add_argument("--gateway_url", required=True, help="SSE endpoint, e.g. http://127.0.0.1:10086/sse")
-    parser.add_argument("--gateway_server_name", default="container_gateway")
+    parser.add_argument("--gateway_server_name", default="gw")
     parser.add_argument("--model", default=None, help="Claude model id override")
     parser.add_argument("--base_url", default=None, help="API base URL override (unified-style)")
     parser.add_argument("--api_key", default=None, help="API key override (unified-style)")
@@ -236,6 +238,10 @@ def parse_user_message_content(content: str | List[ContentBlock]) -> Tuple[str, 
     serialized = [serialize_content_block(block) for block in content]
     text = content_blocks_to_text(content)
     return text, serialized
+
+
+def is_gateway_connectivity_error_text(text: str) -> bool:
+    return text.strip() == GATEWAY_CONNECTIVITY_ERROR_TEXT
 
 
 def decide_task_status(
@@ -619,6 +625,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
     session_id: Optional[str] = None
     result_message: Optional[ResultMessage] = None
     tool_name_by_call_id: Dict[str, str] = {}
+    consecutive_gateway_connectivity_errors = 0
 
     try:
         os.makedirs(task_config.agent_workspace, exist_ok=True)
@@ -685,6 +692,15 @@ async def run_host_loop(args: argparse.Namespace) -> int:
                 if message.tool_use_result is not None:
                     entry["tool_use_result"] = message.tool_use_result
                 messages.append(entry)
+
+                if is_gateway_connectivity_error_text(content_text):
+                    consecutive_gateway_connectivity_errors += 1
+                    if consecutive_gateway_connectivity_errors >= MAX_CONSECUTIVE_GATEWAY_CONNECTIVITY_ERRORS:
+                        raise RuntimeError(
+                            "Detected repeated gateway connectivity failures; aborting Claude SDK host loop"
+                        )
+                else:
+                    consecutive_gateway_connectivity_errors = 0
 
             elif isinstance(message, SystemMessage):
                 session_id = message.data.get("session_id") or session_id

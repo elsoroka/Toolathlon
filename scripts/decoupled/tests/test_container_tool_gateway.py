@@ -4,7 +4,7 @@ from scripts.decoupled.container_tool_gateway import GatewayCore, ToolRegistry
 
 
 class ToolRegistryTests(unittest.TestCase):
-    def test_registry_handles_name_collision(self) -> None:
+    def test_registry_always_prefixes_remote_tool_names(self) -> None:
         registry = ToolRegistry()
         registry.add_remote_tools(
             "server_a",
@@ -29,7 +29,7 @@ class ToolRegistryTests(unittest.TestCase):
 
         tools = registry.list_tools()
         names = [tool["name"] for tool in tools]
-        self.assertIn("search", names)
+        self.assertIn("server_a-search", names)
         self.assertIn("server_b-search", names)
 
 
@@ -97,7 +97,7 @@ class GatewayCoreTests(unittest.IsolatedAsyncioTestCase):
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "search", "arguments": {"q": "toolathlon"}},
+                "params": {"name": "server_a-search", "arguments": {"q": "toolathlon"}},
             }
         )
 
