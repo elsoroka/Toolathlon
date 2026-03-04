@@ -181,6 +181,50 @@ Supported `agent_framework` values:
 - `toolathlon_default`
 - `claude_agent_sdk`
 
+For `toolathlon_default`, keep using the unified provider environment variables when `provider=unified`:
+
+```bash
+export TOOLATHLON_OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
+export TOOLATHLON_OPENAI_API_KEY="your-key"
+```
+
+For `claude_agent_sdk`, set Anthropic-style environment variables on the host before running:
+
+e.g. Anthropic official
+```bash
+export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+export ANTHROPIC_API_KEY="sk-ant-xxx"
+```
+
+e.g. Openrouter
+```bash
+export ANTHROPIC_BASE_URL="https://openrouter.ai/api"
+export ANTHROPIC_API_KEY="YOUR_OPENROUTER_KEY"
+export ANTHROPIC_AUTH_TOKEN=""
+export ANTHROPIC_DEFAULT_SONNET_MODEL="google/gemini-3-flash-preview"
+```
+
+You can also run the decoupled mode in parallel through `scripts/run_parallel.sh`:
+
+```bash
+bash scripts/run_parallel.sh \
+  {model-name} {your_dump_path} unified 10 \
+  lockon0927/toolathlon-task-image:1016beta "" \
+  decoupled normal {agent_framework}
+```
+
+Argument order for the extended `scripts/run_parallel.sh` interface:
+
+1. `model_name`
+2. `dump_path`
+3. `provider`
+4. `workers`
+5. `image_name` (optional)
+6. `config_file` (optional, pass `""` to auto-generate one)
+7. `runner` (`containerized` or `decoupled`)
+8. `runmode`
+9. `agent_framework` (optional)
+
 See [DECOUPLED_AGENT_LOOP.md](DECOUPLED_AGENT_LOOP.md) for the architecture, configuration, and examples.
 
 ## Evaluation in Parallel with Task Isolation
