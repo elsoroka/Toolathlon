@@ -83,18 +83,13 @@ if __name__=="__main__":
         print("Error: Both --agent_workspace and --groundtruth_workspace are required")
         exit(1)
     
-    # Find the Excel file in agent workspace
+    # Find the Excel file in agent workspace, should find "music_analysis_result.xlsx"
     agent_workspace_path = Path(args.agent_workspace)
-    agent_excel_files = list(agent_workspace_path.glob("*.xlsx"))
+    agent_file = agent_workspace_path / "music_analysis_result.xlsx"
     
-    if not agent_excel_files:
-        print(f"Error: No Excel files found in agent workspace: {args.agent_workspace}")
+    if not agent_file.exists():
+        print(f"Error: Agent file not found: {agent_file}")
         exit(1)
-    
-    if len(agent_excel_files) > 1:
-        print(f"Warning: Multiple Excel files found in agent workspace. Using: {agent_excel_files[0]}")
-    
-    agent_file = agent_excel_files[0]
     
     # Find the groundtruth Excel file
     groundtruth_workspace_path = Path(args.groundtruth_workspace)
