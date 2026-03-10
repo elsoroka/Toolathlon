@@ -757,7 +757,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                         'maximum number of tokens',
                         'maximum prompt length is', # for xAI model
                         'request exceeded model token limit', # for kimi
-                        'exceed max message tokens' # for seed
+                        'exceed max message tokens', # for seed
+                        'is longer than'
                     ]):
                         context_too_long = True
                         
@@ -809,7 +810,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                             'maximum number of tokens',
                             'maximum prompt length is', # for xAI model
                             'request exceeded model token limit', # for kimi
-                            'exceed max message tokens' # for seed
+                            'exceed max message tokens', # for seed
+                            'is longer than'
                         ]) or error_code in ['string_above_max_length', 'context_length_exceeded', 'messages_too_long']:
                             context_too_long = True
                     except:
@@ -832,7 +834,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                         'maximum number of tokens',
                         'maximum prompt length is', # for xAI model
                         'request exceeded model token limit', # for kimi
-                        'exceed max message tokens' # for seed
+                        'exceed max message tokens', # for seed
+                        'is longer than'
                     ]):
                         context_too_long = True
                 
