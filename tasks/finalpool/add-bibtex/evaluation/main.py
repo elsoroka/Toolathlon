@@ -139,6 +139,17 @@ async def main(args):
                 matched = True
                 print(f"Fuzzy match: {entry['ID']} <-> {agent_entry['ID']}")
                 break
+
+        if not matched and entry['ID'] == 'roziere2023code':
+            tryagainentry = entry.copy()
+            tryagainentry['ID'] = 'roziere2023codellama'
+            print(f"Trying again for `{entry['ID']}` and we try to match it with `{tryagainentry['ID']}`")
+            for i, agent_entry in enumerate(agent_entries):
+                if entries_match(tryagainentry, agent_entry):
+                    agent_entries.pop(i)
+                    matched = True
+                    print(f"Fuzzy match: {tryagainentry['ID']} <-> {agent_entry['ID']}")
+                    break
         
         if not matched:
             print(f"Missing entry: {entry['ID']}")
