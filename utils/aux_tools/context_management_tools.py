@@ -13,15 +13,15 @@ async def on_check_context_status_invoke(context: RunContextWrapper, params_str:
         session_id = ctx.get("_session_id", "unknown")
         context_limit = ctx.get("_context_limit", 128000)
         
-        # Directly use current usage (already cumulative)
+        # Use the latest request usage for the current sequence length
         total_tokens = 0
         input_tokens = 0
         output_tokens = 0
-        
-        if hasattr(context, 'usage') and context.usage:
-            total_tokens = context.usage.total_tokens or 0
-            input_tokens = context.usage.input_tokens or 0
-            output_tokens = context.usage.output_tokens or 0
+
+        latest_usage = ctx.get("_last_response_usage", {})
+        total_tokens = latest_usage.get("total_tokens", 0) or 0
+        input_tokens = latest_usage.get("input_tokens", 0) or 0
+        output_tokens = latest_usage.get("output_tokens", 0) or 0
         
         # Ensure all values are not None
         total_tokens = total_tokens or 0
@@ -116,6 +116,7 @@ async def on_manage_context_invoke(context: RunContextWrapper, params_str: str) 
     method = params.get("method")
     value = params.get("value")
     preserve_system = params.get("preserve_system", True)
+    preserve_first_user_input = params.get("preserve_first_user_input", True)
     
     # Validate parameters
     valid_methods = ["keep_recent_turns", "keep_recent_percent", "delete_first_turns", "delete_first_percent"]
@@ -141,17 +142,19 @@ async def on_manage_context_invoke(context: RunContextWrapper, params_str: str) 
     # Get current statistics
     meta = ctx.get("_context_meta", {})
     current_turns = meta.get("turns_in_current_sequence", 0)
+    protected_turns = 1 if preserve_first_user_input and current_turns > 0 else 0
+    eligible_turns = current_turns - protected_turns
     
     # Pre-calculate how many turns will be kept
     if method == "keep_recent_turns":
-        keep_turns = int(value)
+        keep_turns = protected_turns + min(int(value), eligible_turns)
     elif method == "keep_recent_percent":
-        keep_turns = max(1, int(current_turns * value / 100))
+        keep_turns = protected_turns + (max(1, int(eligible_turns * value / 100)) if eligible_turns > 0 else 0)
     elif method == "delete_first_turns":
-        keep_turns = max(1, current_turns - int(value))
+        keep_turns = protected_turns + max(0, eligible_turns - int(value))
     elif method == "delete_first_percent":
-        delete_turns = int(current_turns * value / 100)
-        keep_turns = max(1, current_turns - delete_turns)
+        delete_turns = int(eligible_turns * value / 100)
+        keep_turns = protected_turns + max(0, eligible_turns - delete_turns)
     
     if keep_turns >= current_turns:
         return {
@@ -166,6 +169,7 @@ async def on_manage_context_invoke(context: RunContextWrapper, params_str: str) 
         "method": method,
         "value": value,
         "preserve_system": preserve_system,
+        "preserve_first_user_input": preserve_first_user_input,
         "requested_at_turn": meta.get("current_turn", 0),
         "expected_keep_turns": keep_turns,
         "expected_delete_turns": current_turns - keep_turns
@@ -180,7 +184,8 @@ async def on_manage_context_invoke(context: RunContextWrapper, params_str: str) 
             "current_turns": current_turns,
             "will_keep": keep_turns,
             "will_delete": current_turns - keep_turns,
-            "preserve_system_messages": preserve_system
+            "preserve_system_messages": preserve_system,
+            "preserve_first_user_input": preserve_first_user_input
         },
         # "note": "Truncation will be executed after this turn completes, next reply will be based on truncated context."
     }
@@ -191,7 +196,8 @@ tool_manage_context = FunctionTool(
 - keep_recent_turns: Keep the most recent N turns of conversation
 - keep_recent_percent: Keep the most recent X% of conversation  
 - delete_first_turns: Delete the earliest N turns of conversation
-- delete_first_percent: Delete the earliest X% of conversation''',
+- delete_first_percent: Delete the earliest X% of conversation
+Optionally preserve the very first user input so the original task description stays in context.''',
     params_json_schema={
         "type": "object",
         "properties": {
@@ -215,6 +221,11 @@ tool_manage_context = FunctionTool(
                 "type": "boolean",
                 "description": "Whether to preserve system messages",
                 "default": True
+            },
+            "preserve_first_user_input": {
+                "type": "boolean",
+                "description": "Whether to always keep the very first user input in the current sequence",
+                "default": True
             }
         },
         "required": ["method", "value"],
@@ -230,6 +241,7 @@ async def on_smart_context_truncate_invoke(context: RunContextWrapper, params_st
         params = json.loads(params_str)
         ranges = params.get("ranges", [])
         preserve_system = params.get("preserve_system", True)
+        preserve_first_user_input = params.get("preserve_first_user_input", True)
         
         ctx = context.context if hasattr(context, 'context') else {}
         meta = ctx.get("_context_meta", {})
@@ -294,7 +306,13 @@ async def on_smart_context_truncate_invoke(context: RunContextWrapper, params_st
                 }
         
         # Calculate retained turns
-        keep_turns = sum(end - start + 1 for start, end in validated_ranges)
+        retained_turn_indices = set()
+        if preserve_first_user_input and current_turns > 0:
+            retained_turn_indices.add(0)
+        for start, end in validated_ranges:
+            retained_turn_indices.update(range(start, end + 1))
+
+        keep_turns = len(retained_turn_indices)
         delete_turns = current_turns - keep_turns
         
         if delete_turns <= 0:
@@ -310,6 +328,7 @@ async def on_smart_context_truncate_invoke(context: RunContextWrapper, params_st
             "method": "smart_ranges",
             "ranges": validated_ranges,
             "preserve_system": preserve_system,
+            "preserve_first_user_input": preserve_first_user_input,
             "requested_at_turn": meta.get("current_turn", 0),
             "expected_keep_turns": keep_turns,
             "expected_delete_turns": delete_turns
@@ -324,7 +343,8 @@ async def on_smart_context_truncate_invoke(context: RunContextWrapper, params_st
                 "current_turns": current_turns,
                 "will_keep": keep_turns,
                 "will_delete": delete_turns,
-                "preserve_system_messages": preserve_system
+                "preserve_system_messages": preserve_system,
+                "preserve_first_user_input": preserve_first_user_input
             }
         }
         
@@ -345,7 +365,8 @@ tool_smart_context_truncate = FunctionTool(
     name='local-smart_context_truncate',
     description='''Smart context truncation tool that precisely controls retained content by specifying ranges.
 Accepts 2D list [[start1,end1],[start2,end2],...,[startN,endN]], each sublist represents a closed range to retain (both ends included).
-Indexing starts from 0, ranges cannot overlap, must be arranged in order.''',
+Indexing starts from 0, ranges cannot overlap, must be arranged in order.
+Optionally preserve the very first user input so the original task description stays in context.''',
     params_json_schema={
         "type": "object",
         "properties": {
@@ -366,6 +387,11 @@ Indexing starts from 0, ranges cannot overlap, must be arranged in order.''',
             "preserve_system": {
                 "type": "boolean",
                 "description": "Whether to preserve system messages",
+                "default": True
+            },
+            "preserve_first_user_input": {
+                "type": "boolean",
+                "description": "Whether to always keep the very first user input in the current sequence",
                 "default": True
             }
         },

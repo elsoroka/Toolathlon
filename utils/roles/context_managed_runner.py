@@ -316,6 +316,13 @@ class ContextManagedRunner(Runner):
                 previous_response_id,
             )
 
+            ctx["_last_response_usage"] = {
+                "total_tokens": new_response.usage.total_tokens,
+                "input_tokens": new_response.usage.input_tokens,
+                "output_tokens": new_response.usage.output_tokens,
+                "requests": new_response.usage.requests,
+            }
+
             result = await cls._get_single_step_result_from_response(
                 agent=agent,
                 original_input=original_input,
@@ -432,6 +439,7 @@ class ContextManagedRunner(Runner):
         method = truncate_params.get("method")
         value = truncate_params.get("value")
         preserve_system = truncate_params.get("preserve_system", True)
+        preserve_first_user_input = truncate_params.get("preserve_first_user_input", True)
         
         ctx = context_wrapper.context if context_wrapper else {}
         meta = ctx.get("_context_meta", {})
@@ -448,54 +456,79 @@ class ContextManagedRunner(Runner):
         
         if total_turns == 0:
             return  # Nothing to truncate
-        
-        # Apply truncation strategy
-        keep_turns = total_turns  # Default keep all
-        
-        if method == "keep_recent_turns":
-            keep_turns = min(int(value), total_turns)
-        elif method == "keep_recent_percent":
-            keep_turns = max(1, int(total_turns * value / 100))
-        elif method == "delete_first_turns":
-            keep_turns = max(1, total_turns - int(value))
-        elif method == "delete_first_percent":
-            delete_turns = int(total_turns * value / 100)
-            keep_turns = max(1, total_turns - delete_turns)
-        
-        # Do the truncation
-        if keep_turns < total_turns:
-            print("keep_turns < total_turns, truncating history")
-            
-            # Calculate number of turns to delete
-            delete_turns = total_turns - keep_turns
-            
-            # Remove items in order: original_input -> pre_step_items -> new_step_items
-            deleted_items_count = cls._truncate_sequential_lists(
-                original_input, pre_step_items, new_step_items, 
-                turn_boundaries, delete_turns, preserve_system
+
+        if method == "smart_ranges":
+            retained_turn_indices = []
+            if preserve_first_user_input:
+                retained_turn_indices.append(0)
+
+            for start, end in truncate_params.get("ranges", []):
+                for turn_idx in range(start, end + 1):
+                    retained_turn_indices.append(turn_idx)
+
+            retained_turn_indices = sorted(set(retained_turn_indices))
+            delete_turns = total_turns - len(retained_turn_indices)
+            if delete_turns <= 0:
+                return
+
+            retained_boundaries = [turn_boundaries[idx] for idx in retained_turn_indices]
+            deleted_items_count, new_boundaries = cls._retain_sequential_turns(
+                original_input,
+                pre_step_items,
+                new_step_items,
+                retained_boundaries,
             )
-            
-            if deleted_items_count > 0:
-                meta["turns_in_current_sequence"] = keep_turns
-                meta["truncated_turns"] = meta.get("truncated_turns", 0) + delete_turns
-                meta["truncation_history"].append({
-                    "at_turn": meta["current_turn"],
-                    "method": method,
-                    "value": value,
-                    "deleted_items": deleted_items_count,
-                    "deleted_turns": delete_turns,
-                    "timestamp": datetime.now().isoformat()
-                })
-                ctx["_context_truncated"] = True
-                
-                # Update mini_turns_in_current_sequence
-                meta["mini_turns_in_current_sequence"] = len(original_input) + len(pre_step_items) + len(new_step_items)
-                
-                # Update boundary info, subtract deleted item count
-                meta["boundary_in_current_sequence"] = [
-                    (start - deleted_items_count, end - deleted_items_count)
-                    for start, end in turn_boundaries[-keep_turns:]
-                ]
+            keep_turns = len(new_boundaries)
+        else:
+            protected_boundaries = turn_boundaries[:1] if preserve_first_user_input else []
+            eligible_boundaries = turn_boundaries[len(protected_boundaries):]
+            eligible_turns = len(eligible_boundaries)
+            keep_turns = eligible_turns
+
+            if method == "keep_recent_turns":
+                keep_turns = min(int(value), eligible_turns)
+            elif method == "keep_recent_percent":
+                keep_turns = max(1, int(eligible_turns * value / 100)) if eligible_turns > 0 else 0
+            elif method == "delete_first_turns":
+                keep_turns = max(0, eligible_turns - int(value))
+            elif method == "delete_first_percent":
+                delete_turns = int(eligible_turns * value / 100)
+                keep_turns = max(0, eligible_turns - delete_turns)
+            else:
+                return
+
+            if keep_turns >= eligible_turns:
+                return
+
+            print("keep_turns < total_turns, truncating history")
+            delete_turns = eligible_turns - keep_turns
+            deleted_items_count, new_boundaries = cls._truncate_sequential_lists(
+                original_input,
+                pre_step_items,
+                new_step_items,
+                eligible_boundaries,
+                delete_turns,
+                preserve_system,
+                protected_boundaries,
+            )
+            keep_turns = len(new_boundaries)
+
+        if deleted_items_count > 0:
+            meta["turns_in_current_sequence"] = keep_turns
+            meta["truncated_turns"] = meta.get("truncated_turns", 0) + delete_turns
+            meta["truncation_history"].append({
+                "at_turn": meta["current_turn"],
+                "method": method,
+                "value": value,
+                "deleted_items": deleted_items_count,
+                "deleted_turns": delete_turns,
+                "timestamp": datetime.now().isoformat(),
+                "preserve_first_user_input": preserve_first_user_input,
+            })
+            ctx["_context_truncated"] = True
+
+            meta["mini_turns_in_current_sequence"] = len(original_input) + len(pre_step_items) + len(new_step_items)
+            meta["boundary_in_current_sequence"] = new_boundaries
     
     @classmethod
     def _find_turn_boundaries(cls, items: List[TResponseInputItem]) -> List[tuple[int, int]]:
@@ -516,46 +549,70 @@ class ContextManagedRunner(Runner):
         new_step_items: List[RunItem],
         boundaries: List[tuple[int, int]],
         delete_turns: int,
-        preserve_system: bool
-    ) -> int:
-        """Truncate three lists in order, deleting items of given count from the front."""
+        preserve_system: bool,
+        protected_boundaries: Optional[List[tuple[int, int]]] = None,
+    ) -> tuple[int, List[tuple[int, int]]]:
+        """Truncate three lists in order, optionally preserving selected leading boundaries."""
         if delete_turns <= 0:
-            return 0
-        
-        # Compute where to start deleting
-        delete_from_boundary = boundaries[delete_turns - 1]
-        delete_from_idx = delete_from_boundary[1]
-        
-        # Delete sequentially
-        deleted_count = 0
-        
-        # First remove from original_input
-        if delete_from_idx <= len(original_input):
-            original_input[:] = original_input[delete_from_idx:]
-            deleted_count = delete_from_idx
-        else:
-            # Remove all from original_input
-            deleted_count = len(original_input)
+            current_boundaries = list(protected_boundaries or []) + boundaries
+            return 0, current_boundaries
+
+        retained_boundaries = list(protected_boundaries or [])
+        retained_boundaries.extend(boundaries[delete_turns:])
+        return cls._retain_sequential_turns(
+            original_input,
+            pre_step_items,
+            new_step_items,
+            retained_boundaries,
+        )
+
+    @classmethod
+    def _retain_sequential_turns(
+        cls,
+        original_input: List[TResponseInputItem],
+        pre_step_items: List[RunItem],
+        new_step_items: List[RunItem],
+        retained_boundaries: List[tuple[int, int]],
+    ) -> tuple[int, List[tuple[int, int]]]:
+        """Retain only the specified turn boundaries and rebase them onto the compacted sequence."""
+        total_items = len(original_input) + len(pre_step_items) + len(new_step_items)
+        if not retained_boundaries:
             original_input.clear()
-            remaining_delete = delete_from_idx - deleted_count
-            if remaining_delete <= len(pre_step_items):
-                pre_step_items[:] = pre_step_items[remaining_delete:]
-                deleted_count += remaining_delete
-            else:
-                # Remove all pre_step_items
-                deleted_count += len(pre_step_items)
-                pre_step_items.clear()
-                # Remove rest from new_step_items
-                remaining_delete = delete_from_idx - deleted_count
-                if remaining_delete <= len(new_step_items):
-                    new_step_items[:] = new_step_items[remaining_delete:]
-                    deleted_count += remaining_delete
-                else:
-                    # Remove all new_step_items
-                    new_step_items.clear()
-                    deleted_count = delete_from_idx
-        
-        return deleted_count
+            pre_step_items.clear()
+            new_step_items.clear()
+            return total_items, []
+
+        combined_items = [("original", item) for item in original_input]
+        combined_items.extend([("pre", item) for item in pre_step_items])
+        combined_items.extend([("new", item) for item in new_step_items])
+
+        kept_items = []
+        boundary_idx = 0
+        for item_idx, tagged_item in enumerate(combined_items):
+            while boundary_idx < len(retained_boundaries) and item_idx >= retained_boundaries[boundary_idx][1]:
+                boundary_idx += 1
+            if boundary_idx >= len(retained_boundaries):
+                break
+
+            start_idx, end_idx = retained_boundaries[boundary_idx]
+            if item_idx < start_idx:
+                continue
+
+            kept_items.append(tagged_item)
+
+        original_input[:] = [item for source, item in kept_items if source == "original"]
+        pre_step_items[:] = [item for source, item in kept_items if source == "pre"]
+        new_step_items[:] = [item for source, item in kept_items if source == "new"]
+
+        new_boundaries = []
+        cursor = 0
+        for start_idx, end_idx in retained_boundaries:
+            boundary_length = end_idx - start_idx
+            new_boundaries.append((cursor, cursor + boundary_length))
+            cursor += boundary_length
+
+        deleted_items_count = total_items - len(kept_items)
+        return deleted_items_count, new_boundaries
     
     @classmethod
     def _create_truncation_notice(cls, method: str, value: Any, deleted_items: int, deleted_turns: int) -> MessageOutputItem:
