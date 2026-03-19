@@ -132,12 +132,8 @@ async def main():
     print("PREPROCESSING STEP 2: Initialize Snowflake Database")
     print("="*60)
     
-    try:
-        await create_snowflake_db.initialize_database()
-        print("✅ Step 2 completed: Snowflake database initialization")
-    except Exception as e:
-        print(f"❌ Step 2 failed: Database initialization error - {e}")
-        return
+    await create_snowflake_db.initialize_database()
+    print("✅ Step 2 completed: Snowflake database initialization")
     
     # clear emails
     involved_emails_file = os.path.join(os.path.dirname(__file__), "..", "files", "involved_emails.json")

@@ -43,12 +43,8 @@ async def main():
     print("📋 Purpose: Customer Support SLA Timeout Monitoring System")
     print("📋 Tables: USERS, SUPPORT_TICKETS, SLA_CONFIGURATIONS")
     
-    try:
-        groundtruth_data = await create_snowflake_db.initialize_database()
-        print("✅ Step 1 completed: Snowflake database initialization")
-    except Exception as e:
-        print(f"❌ Step 1 failed: Database initialization error - {e}")
-        raise e
+    groundtruth_data = await create_snowflake_db.initialize_database()
+    print("✅ Step 1 completed: Snowflake database initialization")
 
     
     # step 1.5

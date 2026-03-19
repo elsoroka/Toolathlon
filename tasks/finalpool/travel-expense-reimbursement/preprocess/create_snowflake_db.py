@@ -24,6 +24,29 @@ DB_NAME = "TRAVEL_EXPENSE_REIMBURSEMENT"
 SCHEMA_NAME = "PUBLIC"
 TABLE_NAME = "ENTERPRISE_CONTACTS"
 EXPENSE_TABLE_NAME = "2024Q4REIMBURSEMENT"
+ACCOUNT_SUSPENDED_MESSAGE = "Your account is suspended due to lack of payment method"
+
+
+def _extract_result_text(result) -> str:
+    if not hasattr(result, "content") or not result.content:
+        return str(result)
+
+    parts = []
+    for item in result.content:
+        if hasattr(item, "text"):
+            parts.append(str(item.text))
+        elif hasattr(item, "content"):
+            parts.append(str(item.content))
+        else:
+            parts.append(str(item))
+    return "\n".join(parts)
+
+
+def _raise_if_account_suspended(result):
+    result_text = _extract_result_text(result)
+    if ACCOUNT_SUSPENDED_MESSAGE in result_text:
+        raise RuntimeError(result_text)
+    return result_text
 
 
 def slugify_email(name: str) -> str:
@@ -43,7 +66,9 @@ async def execute_sql(server, sql_query: str, tool_type: str = "write"):
         tool_name = "write_query"
 
     arguments = {"query": sql_query}
-    return await call_tool_with_retry(server, tool_name=tool_name, arguments=arguments)
+    result = await call_tool_with_retry(server, tool_name=tool_name, arguments=arguments)
+    _raise_if_account_suspended(result)
+    return result
 
 
 def load_employees_from_groundtruth(groundtruth_dir: str) -> List[Tuple[str, str, str, str]]:
@@ -198,8 +223,10 @@ async def initialize_database():
     async with snowflake_server as server:
 
         print_color("Dropping and creating existing database ... ", "blue")
-        await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": [DB_NAME]})
-        await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": [DB_NAME]})
+        result = await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": [DB_NAME]})
+        _raise_if_account_suspended(result)
+        result = await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": [DB_NAME]})
+        _raise_if_account_suspended(result)
         print_color("Dropped and created existing database", "green")
 
         print_color("Creating contacts table ... ", "blue")

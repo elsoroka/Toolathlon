@@ -39,6 +39,29 @@ except ImportError:
     }
 
 console = Console()
+ACCOUNT_SUSPENDED_MESSAGE = "Your account is suspended due to lack of payment method"
+
+
+def _extract_result_text(result) -> str:
+    if not hasattr(result, "content") or not result.content:
+        return str(result)
+
+    parts = []
+    for item in result.content:
+        if hasattr(item, "text"):
+            parts.append(str(item.text))
+        elif hasattr(item, "content"):
+            parts.append(str(item.content))
+        else:
+            parts.append(str(item))
+    return "\n".join(parts)
+
+
+def _raise_if_account_suspended(result):
+    result_text = _extract_result_text(result)
+    if ACCOUNT_SUSPENDED_MESSAGE in result_text:
+        raise RuntimeError(result_text)
+    return result_text
 
 # SLA configuration - Updated to longer timeframes
 SLA_CONFIGS = {
@@ -175,17 +198,16 @@ async def execute_sql(server, sql_query: str, description: str = "", tool_type: 
             tool_name=tool_name,
             arguments=arguments
         )
+        result_text = _raise_if_account_suspended(result)
         
         print(f"✅ {description or 'SQL executed successfully'}")
-        if hasattr(result, 'content') and result.content:
-            # Try different result access methods
-            if hasattr(result.content[0], 'text'):
-                print(f"   Result: {result.content[0].text}")
-            elif hasattr(result.content[0], 'content'):
-                print(f"   Result: {result.content[0].content}")
+        if result_text:
+            print(f"   Result: {result_text}")
         return True
         
     except Exception as e:
+        if ACCOUNT_SUSPENDED_MESSAGE in str(e):
+            raise
         print(f"❌ Error executing SQL ({description}): {e}")
         return False
 
@@ -212,6 +234,7 @@ async def generate_sample_data(server=None):
                 tool_name="read_query", 
                 arguments={"query": "SELECT CURRENT_TIMESTAMP() AS current_time;"}
             )
+            _raise_if_account_suspended(current_time_result)
             
             # Parse Snowflake's current time
             if current_time_result and hasattr(current_time_result, 'content') and current_time_result.content:
@@ -241,6 +264,8 @@ async def generate_sample_data(server=None):
                 print("⚠️  Could not get Snowflake time, using local time")
                 current_time = datetime.now()
         except Exception as e:
+            if ACCOUNT_SUSPENDED_MESSAGE in str(e):
+                raise
             print(f"⚠️  Error getting Snowflake time: {e}, using local time")
             current_time = datetime.now()
     else:
@@ -373,10 +398,12 @@ async def initialize_database():
             database_exists = await execute_sql(server, check_database_sql, "Checking if database exists", "read")
             if database_exists:
                 print("\n📋 Step 0: Dropping existing database...")
-                await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": ["SLA_MONITOR"]})
+                result = await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": ["SLA_MONITOR"]})
+                _raise_if_account_suspended(result)
 
             print("\n📋 Step 1: Creating new database...")
-            await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": ["SLA_MONITOR"]})
+            result = await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": ["SLA_MONITOR"]})
+            _raise_if_account_suspended(result)
             
             
             # 2. Create users table
@@ -427,6 +454,7 @@ async def initialize_database():
                     tool_name="read_query", 
                     arguments={"query": "SELECT CURRENT_TIMESTAMP() AS current_time;"}
                 )
+                _raise_if_account_suspended(current_time_result)
                 
                 # Parse Snowflake's current time
                 if current_time_result and hasattr(current_time_result, 'content') and current_time_result.content:
@@ -453,6 +481,8 @@ async def initialize_database():
                     print("⚠️  Could not get Snowflake time, using local time")
                     current_time = datetime.now()
             except Exception as e:
+                if ACCOUNT_SUSPENDED_MESSAGE in str(e):
+                    raise
                 print(f"⚠️  Error getting Snowflake time: {e}, using local time")
                 current_time = datetime.now()
                 
@@ -498,6 +528,7 @@ async def initialize_database():
                         tool_name="read_query", 
                         arguments={"query": "SELECT CURRENT_TIMESTAMP() AS current_time;"}
                     )
+                    _raise_if_account_suspended(current_time_result)
                     
                     # Parse Snowflake's current time
                     if current_time_result and hasattr(current_time_result, 'content') and current_time_result.content:
@@ -520,6 +551,8 @@ async def initialize_database():
                     else:
                         updated_at_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
+                    if ACCOUNT_SUSPENDED_MESSAGE in str(e):
+                        raise
                     updated_at_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 insert_ticket_sql = f"""

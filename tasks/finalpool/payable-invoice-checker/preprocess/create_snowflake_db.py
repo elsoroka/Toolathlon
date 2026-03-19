@@ -27,6 +27,7 @@ except ImportError as e:
     print("Please run from the project root directory or ensure the project structure is correct")
     sys.exit(1)
 
+
 # Import the test invoice generation module
 from . import generate_test_invoices
 
@@ -43,7 +44,31 @@ except ImportError:
         "snowflake_op_allowed_databases": "PURCHASE_INVOICE",
     }
 
+
 console = Console()
+ACCOUNT_SUSPENDED_MESSAGE = "Your account is suspended due to lack of payment method"
+
+
+def _extract_result_text(result) -> str:
+    if not hasattr(result, "content") or not result.content:
+        return str(result)
+
+    parts = []
+    for item in result.content:
+        if hasattr(item, "text"):
+            parts.append(str(item.text))
+        elif hasattr(item, "content"):
+            parts.append(str(item.content))
+        else:
+            parts.append(str(item))
+    return "\n".join(parts)
+
+
+def _raise_if_account_suspended(result):
+    result_text = _extract_result_text(result)
+    if ACCOUNT_SUSPENDED_MESSAGE in result_text:
+        raise RuntimeError(result_text)
+    return result_text
 
 
 def display_table_structure():
@@ -102,19 +127,20 @@ async def execute_sql(server, sql_query: str, description: str = "", tool_type: 
             tool_name=tool_name,
             arguments=arguments
         )
+        result_text = _raise_if_account_suspended(result)
         
         print(f"✅ {description or 'SQL executed successfully'}")
-        if hasattr(result, 'content') and result.content:
-            # Try various result access methods
-            if hasattr(result.content[0], 'text'):
-                print(f"   Result: {result.content[0].text}")
-            elif hasattr(result.content[0], 'content'):
-                print(f"   Result: {result.content[0].content}")
+        if result_text:
+            print(f"   Result: {result_text}")
         return True
         
     except Exception as e:
+        if ACCOUNT_SUSPENDED_MESSAGE in str(e):
+            raise
         print(f"❌ Error executing SQL ({description}): {e}")
         return False
+        
+
 
 
 async def generate_invoice_data():
@@ -442,7 +468,7 @@ async def initialize_database():
         config_dir="configs/mcp_servers",
         local_token_key_session=local_token_key_session
     )
-    
+
     try:
         # Get Snowflake server
         snowflake_server = mcp_manager.servers['snowflake']
@@ -460,11 +486,13 @@ async def initialize_database():
             database_exists = await execute_sql(server, check_database_sql, "Checking if database exists", "read")
             if database_exists:
                 print("\n📋 Step 0: Dropping existing database...")
-                await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": ["PURCHASE_INVOICE"]})
+                result = await call_tool_with_retry(server, tool_name="drop_databases", arguments={"databases": ["PURCHASE_INVOICE"]})
+                _raise_if_account_suspended(result)
 
             print("\n📋 Step 1: Creating new database...")
-            await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": ["PURCHASE_INVOICE"]})
-            
+            result = await call_tool_with_retry(server, tool_name="create_databases", arguments={"databases": ["PURCHASE_INVOICE"]})
+            _raise_if_account_suspended(result)
+        
             # 2. Create INVOICES table
             print("\n📋 Step 2: Creating INVOICES table...")
             create_invoices_sql = """
@@ -547,10 +575,11 @@ async def initialize_database():
             print("✅ Tables created: INVOICES, INVOICE_PAYMENTS")
             print("✅ Interference data inserted (1000 records)")
             print("\nReady for agent to read original invoice data from PDF and insert into database.")
-        
+    
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
         sys.exit(1)
+
 
 
 def main():
