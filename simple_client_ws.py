@@ -233,7 +233,7 @@ async def main(server_url: str, llm_base_url: str, llm_api_key: str, job_id: str
             log(f"[Client] Connecting to WebSocket: {ws_url}")
             # Underlying WebSocket ping/pong timeout changed to 120 seconds (originally 10 seconds)
             # This allows for Server short-term busy or network jitter
-            async with connect(ws_url, ping_interval=20, ping_timeout=120) as websocket:
+            async with connect(ws_url, ping_interval=20, ping_timeout=120, max_size=32 * 1024 * 1024) as websocket:
                 log(f"[Client] WebSocket connection successful")
 
                 # Connection successful, reset retry delay
