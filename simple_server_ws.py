@@ -551,4 +551,4 @@ if __name__ == "__main__":
     print(f"WebSocket: ws://0.0.0.0:{port}/ws")
     print("="*50)
 
-    uvicorn.run(app, host="0.0.0.0", port=port, max_size=32 * 1024 * 1024)
+    uvicorn.run(app, host="0.0.0.0", port=port, ws_max_size=32 * 1024 * 1024)
