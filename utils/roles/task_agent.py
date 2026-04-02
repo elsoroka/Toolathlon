@@ -11,17 +11,21 @@ from pathlib import Path
 from agents import (
     Agent,
     RunConfig,
+    Runner,
     Usage,
-    # Runner,
     ModelSettings,
     ToolCallItem,
-    # MessageOutputItem,
-    # ToolCallOutputItem,
     ModelProvider,
     ItemHelpers
 )
 
 from agents.exceptions import MaxTurnsExceeded
+
+from agents.extensions.planner_executor import (
+    PlannerOutput,
+    _DEFAULT_PLANNER_INSTRUCTIONS,
+    _DEFAULT_EXECUTOR_INSTRUCTIONS,
+)
 
 from utils.roles.context_managed_runner import ContextManagedRunner, _ServerConversationTracker
 from utils.api_model.model_provider import ContextTooLongError
@@ -95,6 +99,7 @@ class TaskAgent:
         allow_resume: bool = False,
         manual: bool = False,
         single_turn_mode: bool = False,
+        agent_pattern: str = "default",
     ):
         self.task_config = task_config
         self.agent_config = agent_config
@@ -140,6 +145,8 @@ class TaskAgent:
         self.checkpoint_interval = 1  # Save checkpoint every N turns
 
         self.single_turn_mode = single_turn_mode
+        self.agent_pattern = agent_pattern
+        self._plan: Optional[str] = None
 
         self.shared_context = {}
 
@@ -451,6 +458,85 @@ class TaskAgent:
                 }
             })
     
+    async def _run_planner_phase(self) -> None:
+        """Run a single-turn planner agent to generate a step-by-step plan.
+
+        Builds a tool catalog from self.all_tools (already populated by setup_agent()),
+        runs a planner Agent with no MCP servers or tools, then rebuilds self.agent with
+        the resulting plan injected into its system prompt.
+        """
+        self._debug_print("=== Running planner phase ===")
+
+        # Build tool catalog from already-enumerated tools
+        lines = []
+        for tool_entry in self.all_tools:
+            fn = tool_entry.get("function", {})
+            name = fn.get("name", "")
+            desc = (fn.get("description") or "").strip().splitlines()
+            first_line = desc[0] if desc else ""
+            lines.append(f"- {name}: {first_line}" if first_line else f"- {name}")
+        tool_catalog = "\n".join(lines) if lines else "(no tools available)"
+
+        # Create planner agent — no MCP servers, no tools, single turn
+        planner_instructions = _DEFAULT_PLANNER_INSTRUCTIONS.format(
+            tool_catalog=tool_catalog
+        )
+        planner_agent: Agent = Agent(
+            name="planner",
+            instructions=planner_instructions,
+            model=self.agent_model_provider.get_model(
+                self.agent_config.model.real_name,
+                debug=self.debug,
+                short_model_name=self.agent_config.model.short_name,
+            ),
+            output_type=PlannerOutput,
+        )
+
+        # Run planner (single turn, bare Runner — no history tracking needed)
+        planner_result = await Runner.run(
+            planner_agent,
+            self.task_config.task_str,
+            run_config=RunConfig(model_provider=self.agent_model_provider),
+            max_turns=1,
+        )
+
+        # Account for planner token usage
+        for raw_response in planner_result.raw_responses:
+            self.usage.add(raw_response.usage)
+            self.stats["agent_llm_requests"] += 1
+
+        assert isinstance(planner_result.final_output, PlannerOutput), (
+            f"Planner returned unexpected output type: {type(planner_result.final_output)}"
+        )
+        self._plan = planner_result.final_output.plan
+        self._debug_print(f"=== Plan generated ===\n{self._plan}")
+
+        # Rebuild executor agent with plan injected into instructions
+        executor_instructions = (
+            f"{_DEFAULT_EXECUTOR_INSTRUCTIONS}\n\n"
+            f"## Plan\n{self._plan}\n\n"
+            f"## Additional Task Context\n{self.task_config.system_prompts.agent}"
+        )
+        self.agent = Agent(
+            name="Assistant",
+            instructions=executor_instructions,
+            model=self.agent_model_provider.get_model(
+                self.agent_config.model.real_name,
+                debug=self.debug,
+                short_model_name=self.agent_config.model.short_name,
+            ),
+            mcp_servers=[*self.mcp_manager.get_all_connected_servers()],
+            tools=self.agent.tools,
+            hooks=self.agent_hooks,
+            model_settings=ModelSettings(
+                tool_choice=self.agent_config.tool.tool_choice,
+                parallel_tool_calls=self.agent_config.tool.parallel_tool_calls,
+                **{k: getattr(self.agent_config.generation, k)
+                   for k in vars(self.agent_config.generation)},
+            ),
+        )
+        self._debug_print("=== Executor agent rebuilt with plan ===")
+
     async def setup_user_simulator(self) -> None:
         """Initialize user simulator."""
         user_runtime_config = UserRuntimeConfig(
@@ -880,7 +966,11 @@ class TaskAgent:
             
             # Setup agent (LLM assistant)
             await self.setup_agent()
-            
+
+            # Planner phase: generate a plan before the main loop (planner_executor pattern)
+            if self.agent_pattern == "planner_executor":
+                await self._run_planner_phase()
+
             # Setup user simulator
             await self.setup_user_simulator()
             

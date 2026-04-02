@@ -27,6 +27,7 @@ class TaskRunner:
         allow_resume: bool=False,
         manual: bool=False,
         single_turn_mode: bool=False,
+        agent_pattern: str="default",
     ) -> TaskStatus:
         """Run a single task"""
         # Build model provider and client
@@ -63,6 +64,7 @@ class TaskRunner:
             allow_resume=allow_resume,
             manual=manual,
             single_turn_mode=single_turn_mode,
+            agent_pattern=agent_pattern,
         )
         
         return await task_agent.run()

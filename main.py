@@ -37,8 +37,11 @@ async def main():
                        help="Maximum number of steps under single turn mode")
     parser.add_argument("--model_short_name", type=str, default=None, 
                        help="Model name")
-    parser.add_argument("--provider", type=str, default="unified", 
+    parser.add_argument("--provider", type=str, default="unified",
                        help="Provider")
+    parser.add_argument("--agent_pattern", type=str, default="default",
+                       choices=["default", "planner_executor"],
+                       help="Agent execution pattern (default: standard loop; planner_executor: plan then execute)")
     args = parser.parse_args()
     
     # Set Proxy (if needed)
@@ -76,6 +79,7 @@ async def main():
         allow_resume=args.allow_resume,
         manual=args.manual,
         single_turn_mode=not args.multi_turn_mode,
+        agent_pattern=args.agent_pattern,
     )
     
     print_color(f"\n====== Task completed with status ======", "yellow")
