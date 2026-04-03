@@ -15,7 +15,8 @@ print_color(f"BENCH_ENABLE_OVERLONG_TOOL_OUTPUT_MANAGEMENT: {ENABLE_OVERLONG_TOO
 
 @classmethod
 def my_to_function_tool(
-    cls, tool: "MCPTool", server: "MCPServer", convert_schemas_to_strict: bool
+    cls, tool: "MCPTool", server: "MCPServer", convert_schemas_to_strict: bool,
+    agent=None, failure_error_function=None,
 ) -> FunctionTool:
     """Convert an MCP tool to an Agents SDK function tool."""
     invoke_func = functools.partial(cls.invoke_mcp_tool, server, tool)

@@ -10,7 +10,7 @@ from agents import (
     set_tracing_disabled,
     _debug
 )
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, NOT_GIVEN
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem, ResponseStreamEvent
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
@@ -351,6 +351,9 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
         self.debug = debug
         self.short_model_name = short_model_name
 
+    def _non_null_or_not_given(self, value):
+        return value if value is not None else NOT_GIVEN
+
     def _add_cache_control_to_messages(self, messages: list, min_cache_tokens: int = 2048) -> list:
         """
         Add cache_control breakpoints to messages every 20 blocks from the front.
@@ -621,6 +624,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
         handoffs: list[Handoff],
         tracing: ModelTracing,
         previous_response_id: str | None,
+        conversation_id: str | None = None,
+        prompt=None,
     ) -> ModelResponse:
         with generation_span(
             model=str(self.model),
