@@ -142,7 +142,27 @@ class ContextManagedRunner(Runner):
             run_config=run_config,
             previous_response_id=previous_response_id,
         )
-        
+
+        # The SDK no longer calls cls._run_single_turn(), so we save generated items here.
+        # _run_single_turn was the old hook point; the new SDK dispatches through AgentRunner
+        # (an instance), bypassing any classmethod overrides on Runner subclasses.
+        if result.new_items:
+            ctx = wrapped_context if isinstance(wrapped_context, dict) else {}
+            saved_session_id = ctx.get("_session_id", session_id)
+            saved_history_dir = Path(ctx.get("_history_dir", str(history_dir)))
+            meta = ctx.get("_context_meta", {})
+            turn_number = meta.get("current_turn", 0) + 1
+            meta["current_turn"] = turn_number
+            meta["total_turns_ever"] = meta.get("total_turns_ever", 0) + 1
+            meta["turns_in_current_sequence"] = meta.get("turns_in_current_sequence", 0) + 1
+            cls._save_items_to_history(
+                session_id=saved_session_id,
+                turn_number=turn_number,
+                items=result.new_items,
+                agent_name=starting_agent.name if starting_agent else "unknown",
+                history_dir=saved_history_dir,
+            )
+
         return result
 
     @classmethod
