@@ -5,6 +5,8 @@ from typing import Dict, Any, List, Union, Optional
 from datetime import datetime
 from pathlib import Path
 
+from prompt_toolkit.shortcuts import input_dialog
+
 from agents import Runner, RunConfig, RunHooks, Agent, RunResult
 from agents.run_context import RunContextWrapper, TContext
 from agents.items import (
@@ -146,15 +148,32 @@ class ContextManagedRunner(Runner):
         # The SDK no longer calls cls._run_single_turn(), so we save generated items here.
         # _run_single_turn was the old hook point; the new SDK dispatches through AgentRunner
         # (an instance), bypassing any classmethod overrides on Runner subclasses.
+        ctx = wrapped_context if isinstance(wrapped_context, dict) else {}
+        saved_session_id = ctx.get("_session_id", session_id)
+        saved_history_dir = Path(ctx.get("_history_dir", str(history_dir)))
+        meta = ctx.get("_context_meta", {})
+        turn_number = meta.get("current_turn", 0) + 1
+        meta["current_turn"] = turn_number
+        meta["total_turns_ever"] = meta.get("total_turns_ever", 0) + 1
+        meta["turns_in_current_sequence"] = meta.get("turns_in_current_sequence", 0) + 1
+
+        # Resolve and log the agent's system prompt so plan + memory are visible in history
+        if starting_agent is not None:
+            try:
+                ctx_wrapper = RunContextWrapper(context=wrapped_context)
+                resolved_system_prompt = await starting_agent.get_system_prompt(ctx_wrapper)
+                if resolved_system_prompt:
+                    cls._save_system_prompt_to_history(
+                        session_id=saved_session_id,
+                        turn_number=turn_number,
+                        system_prompt=resolved_system_prompt,
+                        agent_name=starting_agent.name,
+                        history_dir=saved_history_dir,
+                    )
+            except Exception:
+                pass  # Never let logging failure break the run
+
         if result.new_items:
-            ctx = wrapped_context if isinstance(wrapped_context, dict) else {}
-            saved_session_id = ctx.get("_session_id", session_id)
-            saved_history_dir = Path(ctx.get("_history_dir", str(history_dir)))
-            meta = ctx.get("_context_meta", {})
-            turn_number = meta.get("current_turn", 0) + 1
-            meta["current_turn"] = turn_number
-            meta["total_turns_ever"] = meta.get("total_turns_ever", 0) + 1
-            meta["turns_in_current_sequence"] = meta.get("turns_in_current_sequence", 0) + 1
             cls._save_items_to_history(
                 session_id=saved_session_id,
                 turn_number=turn_number,
@@ -694,9 +713,32 @@ class ContextManagedRunner(Runner):
                 f.write(json.dumps(record, ensure_ascii=False) + '\n')
     
     @classmethod
-    def _save_initial_input_to_history(cls, 
-                                       session_id: str, 
-                                       input: Union[str, List[TResponseInputItem]], 
+    def _save_system_prompt_to_history(
+        cls,
+        session_id: str,
+        turn_number: int,
+        system_prompt: str,
+        agent_name: str,
+        history_dir: Path,
+    ):
+        """Save the resolved system prompt for this turn to the history file."""
+        history_path = history_dir / f"{session_id}_history.jsonl"
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "in_turn_steps": -1,  # Negative so it sorts before turn items
+            "turn": turn_number,
+            "timestamp": datetime.now().isoformat(),
+            "agent": agent_name,
+            "type": "system_prompt",
+            "content": system_prompt,
+        }
+        with open(history_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+    @classmethod
+    def _save_initial_input_to_history(cls,
+                                       session_id: str,
+                                       input: Union[str, List[TResponseInputItem]],
                                        history_dir: Path,
                                        turn_number: int = 0):
         """Save the initial input to history."""
@@ -810,7 +852,14 @@ class ContextManagedRunner(Runner):
         while item_index < len(records):
             current_record = records[item_index]
             
-            if current_record.get("type") == "user_input":
+            if current_record.get("type") == "system_prompt":
+                formatted_messages.append({
+                    "role": "system",
+                    "content": current_record.get("content", ""),
+                })
+                item_index += 1
+
+            elif current_record.get("type") == "user_input":
                 # User input
                 content = current_record.get("content", "")
                 if isinstance(content, list):
@@ -843,6 +892,7 @@ class ContextManagedRunner(Runner):
                                 content_parts.append(content_item.get("text", ""))
                             elif content_item.get("type") == "reasoning_content":
                                 pure_thinking_str = content_item.get("pure_thinking_str")
+                        
                     content = " ".join(content_parts)
                 
                 if role == "system" and "Context Management" in content:
@@ -855,7 +905,7 @@ class ContextManagedRunner(Runner):
                     # Last message, final assistant reply
                     message = {
                         "role": role,
-                        "content": content
+                        "content": content,
                     }
                     if pure_thinking_str:
                         message["thinking"] = pure_thinking_str
@@ -943,7 +993,14 @@ class ContextManagedRunner(Runner):
                 
             else:
                 # Skip other types of records
+                formatted_messages.append({
+                    "role": "unknown",
+                    "raw_content": current_record.get("raw_content", {}),
+                })
                 item_index += 1
+            
+            if len(formatted_messages) > 0:
+                formatted_messages[-1]['raw_content'] = current_record.get("raw_content", {})
         
         return formatted_messages
 

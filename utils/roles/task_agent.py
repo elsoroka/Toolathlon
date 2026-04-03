@@ -26,6 +26,7 @@ from agents.extensions.planner_executor import (
     _DEFAULT_PLANNER_INSTRUCTIONS,
     _DEFAULT_EXECUTOR_INSTRUCTIONS,
 )
+from agents import function_tool as _function_tool
 
 from utils.roles.context_managed_runner import ContextManagedRunner, _ServerConversationTracker
 from utils.api_model.model_provider import ContextTooLongError
@@ -147,6 +148,7 @@ class TaskAgent:
         self.single_turn_mode = single_turn_mode
         self.agent_pattern = agent_pattern
         self._plan: Optional[str] = None
+        self._memory: str = ""
 
         self.shared_context = {}
 
@@ -509,14 +511,27 @@ class TaskAgent:
             f"Planner returned unexpected output type: {type(planner_result.final_output)}"
         )
         self._plan = planner_result.final_output.plan
+        self._memory = ""
         self._debug_print(f"=== Plan generated ===\n{self._plan}")
 
-        # Rebuild executor agent with plan injected into instructions
-        executor_instructions = (
-            f"{_DEFAULT_EXECUTOR_INSTRUCTIONS}\n\n"
-            f"## Plan\n{self._plan}\n\n"
-            f"## Additional Task Context\n{self.task_config.system_prompts.agent}"
-        )
+        # Callable so memory is re-evaluated fresh each turn
+        def executor_instructions(ctx: RunContextWrapper, _agent: Agent) -> str:
+            parts = [
+                _DEFAULT_EXECUTOR_INSTRUCTIONS,
+                f"## Plan\n{self._plan}",
+                f"## Additional Task Context\n{self.task_config.system_prompts.agent}",
+            ]
+            if self._memory:
+                parts.append(f"## Memory of your previous actions\n{self._memory}")
+            return "\n\n".join(parts)
+
+        # Closure so writes go to self._memory (no shared context object needed)
+        @_function_tool
+        def update_memory(ctx: RunContextWrapper, note: str) -> str:
+            """Append a note to your working memory (e.g. 'Completed step 2: found 3 files'). Call this after each plan step so you can track progress."""
+            self._memory = (self._memory + "\n" + note).strip()
+            return "Memory updated."
+
         self.agent = Agent(
             name="Assistant",
             instructions=executor_instructions,
@@ -526,7 +541,7 @@ class TaskAgent:
                 short_model_name=self.agent_config.model.short_name,
             ),
             mcp_servers=[*self.mcp_manager.get_all_connected_servers()],
-            tools=self.agent.tools,
+            tools=[*self.agent.tools, update_memory],
             hooks=self.agent_hooks,
             model_settings=ModelSettings(
                 tool_choice=self.agent_config.tool.tool_choice,
@@ -920,6 +935,7 @@ class TaskAgent:
                     'tool_choice': self.agent_config.tool.tool_choice,
                 },
                 "status": self.task_status.value,
+                'plan': self._plan,
                 'messages': complete_messages,
                 'key_stats': {**self.stats, **session_stats},
                 'agent_cost': self.agent_cost,
