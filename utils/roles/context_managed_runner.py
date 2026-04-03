@@ -13,7 +13,9 @@ from agents.items import (
     ModelResponse
 )
 from agents.tool import Tool
-from agents._run_impl import AgentToolUseTracker, SingleStepResult
+from agents.run_internal.tool_use_tracker import AgentToolUseTracker
+from agents.run_internal.run_steps import SingleStepResult
+from utils.openai_agents_monkey_patch.custom_run_impl import process_model_response
 
 
 from dataclasses import dataclass, field

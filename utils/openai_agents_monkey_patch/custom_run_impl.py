@@ -1,6 +1,6 @@
 # monkeypatch
 from __future__ import annotations
-from agents._run_impl import *
+from agents.run_internal import *
 from agents.util import _coro, _error_tracing
 
 @classmethod
@@ -166,5 +166,5 @@ def my_process_model_response(
         tools_used=tools_used,
     )
 
-RunImpl.process_model_response = my_process_model_response
-RunImpl.execute_function_tool_calls = my_execute_function_tool_calls
+process_model_response = my_process_model_response
+execute_function_tool_calls = my_execute_function_tool_calls

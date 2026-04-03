@@ -12,7 +12,7 @@ from agents import (
 )
 from openai import AsyncOpenAI, NOT_GIVEN
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem, ResponseStreamEvent
-from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
+from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage, ChatCompletionMessageToolCallParam
 from openai.types.chat.chat_completion import Choice
 
 from configs.global_configs import global_configs
@@ -864,8 +864,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                 
                 # For other errors: continue retry logic
                 if self.debug:
-                    # import traceback
-                    # traceback.print_exc()
+                    #import traceback
+                    #traceback.print_exc()
                     print(f"Error in get_response: {e}, retry {i+1}/{self.retry_times}, waiting {self.retry_delay} seconds...")
                 
                 # Raise if it's the last try
@@ -948,8 +948,8 @@ class OpenAIResponsesModelWithRetry(OpenAIResponsesModel):
                 
                 # For other errors: continue retry logic
                 if self.debug:
-                    # import traceback
-                    # traceback.print_exc()
+                    #import traceback
+                    #traceback.print_exc()
                     print(f"Error in get_response: {e}, retry {i+1}/{self.retry_times}, waiting {self.retry_delay} seconds...")
                 
                 # Raise if it's the last try

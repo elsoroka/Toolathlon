@@ -1,27 +1,63 @@
 #!/bin/bash
 
 # Script for running a single task in a containerized environment
-# Usage: ./run_single_containerized.sh <task_dir> <runmode> <dump_path> <modelname> [provider] [maxstep] [eval_config] [image_name]
+# Usage: ./run_single_containerized.sh --task_dir <domain/taskname> --modelname <model> [options]
+#
+# Required:
+#   --task_dir   <domain/taskname>   e.g. finalpool/find-alita-paper
+#   --modelname  <model>             e.g. anthropic/claude-sonnet-4.5
+#
+# Optional:
+#   --runmode    <mode>              normal|quickstart (default: normal)
+#   --dump_path  <path>             (default: ./dumps_quick_start)
+#   --provider   <provider>         (default: unified)
+#   --maxstep    <n>                (default: 100)
+#   --eval_config <path>            (default: scripts/formal_run_v0.json)
+#   --image_name <image>            (default: lockon0927/toolathlon-task-image:1016beta)
+#   --agent_pattern <pattern>       default|planner_executor (default: default)
 
-#### If you want to use the unified model provider, 
-# but do not want to explicitly export these environment variables in your shell, 
+#### If you want to use the unified model provider,
+# but do not want to explicitly export these environment variables in your shell,
 # you can also uncomment these lines and set the values here
 # ↓↓↓↓ uncomment these lines ↓↓↓↓
-# TOOLATHLON_OPENAI_BASE_URL="your-custom-base-url"
-# TOOLATHLON_OPENAI_API_KEY="your-custom-api-key"
-# export TOOLATHLON_OPENAI_BASE_URL
-# export TOOLATHLON_OPENAI_API_KEY
+TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
+TOOLATHLON_OPENAI_API_KEY=""
+export TOOLATHLON_OPENAI_BASE_URL
+export TOOLATHLON_OPENAI_API_KEY
 
 set -e
 
-task_dir_arg=$1 # domain/taskname
-runmode=${2:-"normal"}
-dump_path=${3:-"./dumps_quick_start"}
-modelname=${4:-"anthropic/claude-sonnet-4.5"}
-provider=${5:-"unified"}
-maxstep=${6:-"100"}
-eval_config=${7:-"scripts/formal_run_v0.json"}
-image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
+# Defaults
+task_dir_arg=""
+runmode="normal"
+dump_path="./dumps_quick_start"
+modelname="anthropic/claude-sonnet-4.5"
+provider="unified"
+maxstep="100"
+eval_config="scripts/formal_run_v0.json"
+image_name="lockon0927/toolathlon-task-image:1016beta"
+agent_pattern="default"
+
+# Parse named flags (supports both --flag value and --flag=value)
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --*=*)
+            key="${1%%=*}"
+            val="${1#*=}"
+            set -- "$key" "$val" "${@:2}"
+            ;;
+        --task_dir)    task_dir_arg="$2"; shift 2 ;;
+        --runmode)     runmode="$2";      shift 2 ;;
+        --dump_path)   dump_path="$2";    shift 2 ;;
+        --modelname)   modelname="$2";    shift 2 ;;
+        --provider)    provider="$2";     shift 2 ;;
+        --maxstep)     maxstep="$2";      shift 2 ;;
+        --eval_config) eval_config="$2";  shift 2 ;;
+        --image_name)  image_name="$2";   shift 2 ;;
+        --agent_pattern) agent_pattern="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
 
 taskdomain=${task_dir_arg%/*}
 taskname=${task_dir_arg#*/}
@@ -31,9 +67,9 @@ container_log_path="${dump_path}/${taskdomain}/${taskname}/container.log"
 run_log_path="${dump_path}/${taskdomain}/${taskname}/run.log"
 output_folder="${dump_path}/${taskdomain}/${taskname}"
 
-if [ -z "$task_dir_arg" ] || [ -z "$runmode" ] || [ -z "$modelname" ]; then
-    echo "Usage: $0 <task_dir> <runmode> <modelname>"
-    echo "Example: $0 debug/debug-task testrun testmodel"
+if [ -z "$task_dir_arg" ] || [ -z "$modelname" ]; then
+    echo "Usage: $0 --task_dir <domain/taskname> --modelname <model> [--runmode normal|quickstart] [--dump_path ./dumps] [--provider unified] [--maxstep 100] [--eval_config scripts/formal_run_v0.json] [--image_name <image>] [--agent_pattern default|planner_executor]"
+    echo "Example: $0 --task_dir finalpool/find-alita-paper --runmode quickstart --dump_path ./dumps --modelname anthropic/claude-sonnet-4.5"
     exit 1
 fi
 
@@ -159,6 +195,8 @@ FILES_TO_COPY=(
     "local_binary/github-mcp-server"
     "utils"
     "main.py"
+    "pyproject.toml"
+    "uv.lock"
 )
 
 # Verify all required files/directories exist
@@ -347,6 +385,15 @@ fi
 # Copy actual task directory
 $CONTAINER_RUNTIME cp "$TASK_SOURCE" "$CONTAINER_NAME:/workspace/tasks/$TARGET_PARENT_DIR/"
 
+# Copy openai-agents-python (outside project root; pyproject.toml references it as "../openai-agents-python")
+OAP_SOURCE="$PROJECT_ROOT/../openai-agents-python"
+if [ -d "$OAP_SOURCE" ]; then
+    echo "  Copying openai-agents-python to container at /openai-agents-python..."
+    $CONTAINER_RUNTIME cp "$OAP_SOURCE" "$CONTAINER_NAME:/openai-agents-python"
+else
+    echo "  Warning: openai-agents-python not found at $OAP_SOURCE, skipping"
+fi
+
 echo "✓ File copying completed"
 
 # Step 2.5.1: Copy model_params file to container if specified
@@ -431,8 +478,8 @@ fi
 
 # When running commands in the container, these env variables are already present due to -e at startup.
 
-CONTAINER_CMD="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --debug > /workspace/logs/$RUN_LOG_FILE_NAME 2>&1"
-CONTAINER_CMD_DISPLAY_INPLACE="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --debug"
+CONTAINER_CMD="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern --debug > /workspace/logs/$RUN_LOG_FILE_NAME 2>&1"
+CONTAINER_CMD_DISPLAY_INPLACE="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern --debug"
 
 # if quickstart mode, use the display inplace command
 if [ "$runmode" = "quickstart" ]; then

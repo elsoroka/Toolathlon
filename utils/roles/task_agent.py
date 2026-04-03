@@ -16,11 +16,11 @@ from agents import (
     ModelSettings,
     ToolCallItem,
     ModelProvider,
-    ItemHelpers
+    ItemHelpers,
+    RunContextWrapper,
 )
 
 from agents.exceptions import MaxTurnsExceeded
-
 from agents.extensions.planner_executor import (
     PlannerOutput,
     _DEFAULT_PLANNER_INSTRUCTIONS,
@@ -446,8 +446,8 @@ class TaskAgent:
             ),
         )
         
-        # Get all available tools
-        available_tools = await self.agent.get_all_tools()
+        # Get all available tools, needs to pass in run context
+        available_tools = await self.agent.get_all_tools(RunContextWrapper(self.shared_context))
         for tool in available_tools:
             self.all_tools.append({
                 "type": "function",
