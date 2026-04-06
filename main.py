@@ -40,8 +40,8 @@ async def main():
     parser.add_argument("--provider", type=str, default="unified",
                        help="Provider")
     parser.add_argument("--agent_pattern", type=str, default="default",
-                       choices=["default", "planner_executor"],
-                       help="Agent execution pattern (default: standard loop; planner_executor: plan then execute)")
+                       choices=["default", "planner_executor", "coding"],
+                       help="Agent execution pattern (default: standard loop; planner_executor: plan then execute; coding: plan in code and execute in code)")
     args = parser.parse_args()
     
     # Set Proxy (if needed)

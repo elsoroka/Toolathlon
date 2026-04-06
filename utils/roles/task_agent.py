@@ -460,7 +460,9 @@ class TaskAgent:
                 }
             })
     
-    async def _run_planner_phase(self) -> None:
+    async def _run_planner_phase(self,
+        _DEFAULT_PLANNER_INSTRUCTIONS=_DEFAULT_PLANNER_INSTRUCTIONS,
+        _DEFAULT_EXECUTOR_INSTRUCTIONS=_DEFAULT_EXECUTOR_INSTRUCTIONS) -> None:
         """Run a single-turn planner agent to generate a step-by-step plan.
 
         Builds a tool catalog from self.all_tools (already populated by setup_agent()),

@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 from utils.roles.task_agent import TaskAgent, TaskStatus
+from utils.roles.coding_task_agent import CodingTaskAgent
 from utils.task_runner.hooks import AgentLifecycle, RunLifecycle
 from utils.general.helper import build_agent_model_provider, build_user_client,print_color
 from utils.data_structures.task_config import TaskConfig
@@ -47,8 +48,12 @@ class TaskRunner:
         print_color("=== Actual mcp config ===", "magenta")
         pprint(mcp_config)
 
+        Agent = TaskAgent
+        if agent_pattern == "coding":
+            Agent = CodingTaskAgent # dumb hack
+
         # Create and run TaskAgent
-        task_agent = TaskAgent(
+        task_agent = Agent(
             task_config=task_config,
             agent_config=agent_config,
             agent_model_provider=agent_model_provider,

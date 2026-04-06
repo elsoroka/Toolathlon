@@ -20,10 +20,10 @@
 # but do not want to explicitly export these environment variables in your shell,
 # you can also uncomment these lines and set the values here
 # ↓↓↓↓ uncomment these lines ↓↓↓↓
-TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
-TOOLATHLON_OPENAI_API_KEY=""
-export TOOLATHLON_OPENAI_BASE_URL
-export TOOLATHLON_OPENAI_API_KEY
+# TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
+# TOOLATHLON_OPENAI_API_KEY="your-api-key-here"
+# export TOOLATHLON_OPENAI_BASE_URL
+# export TOOLATHLON_OPENAI_API_KEY
 
 set -e
 
