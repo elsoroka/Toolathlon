@@ -7,6 +7,8 @@ from utils.task_runner.runner import TaskRunner
 from utils.evaluation.evaluator import TaskEvaluator
 from utils.general.helper import setup_proxy,print_color
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from utils.openai_agents_monkey_patch.custom_run_impl import *
 from utils.openai_agents_monkey_patch.custom_mcp_util import *
