@@ -24,7 +24,7 @@ from agents import (
     RunResultStreaming,
 )
 
-from openai.types.responses import ResponseOutputMessage, ResponseFunctionToolCall
+from openai.types.responses import ResponseOutputMessage, ResponseFunctionToolCall, ResponseOutputText
 
 from agents.exceptions import MaxTurnsExceeded
 from agents.extensions.coding_planner_executor import (
@@ -124,6 +124,8 @@ class CodingTaskAgent(TaskAgent):
                 self._debug_print(f"Warning: could not list tools for server {server_name}: {e}")
         return self._tool_server_map
 
+    # ------------- Tool calling ------------- #
+
     async def _call_tool(self, tool_name: str, **kwargs):
         """Call an MCP tool by name and return the text output, or None on error.
 
@@ -138,7 +140,7 @@ class CodingTaskAgent(TaskAgent):
 
         server, bare_name = entry
         try:
-            result = await server.call_tool(bare_name, kwargs)
+            result = await server.call_tool(bare_name, arguments=kwargs)
         except Exception as e:
             self._debug_print(f"_call_tool: exception calling '{tool_name}': {e}")
             return None
@@ -159,14 +161,15 @@ class CodingTaskAgent(TaskAgent):
 
         return None
     
-    async def _call_executor(self, prompt:str, return_type: str = "str"):
 
+    async def _call_executor(self, instructions:str, return_type: str = "str"):
+        """
         async def extractor(result: RunResult | RunResultStreaming) -> str:
             #nonlocal received_tool_call_id
             invocation = result.agent_tool_invocation
             assert invocation is not None
             #received_tool_call_id = invocation.tool_call_id
-            return result.final_output.text
+            return result
 
         executor_result = None
         
@@ -178,43 +181,65 @@ class CodingTaskAgent(TaskAgent):
             )
                     
             parent_tool_context = ToolContext(
-                context=prompt,
+                context=instructions,
                 tool_name="executor",
-                tool_call_id=str(hash(prompt)),
+                tool_call_id=str(hash(instructions)),
                 tool_arguments=dict(),
             )
-            executor_result = await tool.on_invoke_tool(parent_tool_context, dict())
+            executor_result : str | None = await tool.on_invoke_tool(parent_tool_context, dict())
 
         except Exception as e:
-            self._debug_print(f"Error calling executor on prompt: {prompt}. Exception: {e}")
+            self._debug_print(f"Error calling executor on prompt: {instructions}. Exception: {e}")
             return None
         
+        if not executor_result:
+            return None
+        """
+        # Call the executor agent with the instructions, allowing it to call the mcp servers' tools and take multiple steps on its own.
+        # get executor_result as a string
+        executor_result = None
+        try:
+            result = await Runner.run(
+                self.agent,
+                instructions,
+                run_config=RunConfig(model_provider=self.agent_model_provider),
+                max_turns=self.agent_config.tool.max_inner_turns,
+            )
+            for raw_response in result.raw_responses:
+                self.usage.add(raw_response.usage)
+                self.stats["agent_llm_requests"] += 1
+            executor_result = str(result.final_output) if result.final_output is not None else None
+        except Exception as e:
+            self._debug_print(f"Error calling executor on prompt: {instructions}. Exception: {e}")
+            return None
+
         if not executor_result:
             return None
 
         # Try to cast the result to the right type
         try:
             if return_type == "str":
-                return executor_result.final_output.text
+                return executor_result
             elif return_type == "int":
-                return int(executor_result.final_output.text)
+                return int(executor_result)
             elif return_type == "float":
-                return float(executor_result.final_output.text)
+                return float(executor_result)
             elif return_type == "bool":
-                return bool(executor_result.final_output.text)
+                return bool(executor_result)
             elif return_type == "list":
-                return return_type(executor_result.final_output.text)
+                return [str(item).strip(" \"'") for item in str(executor_result).split(",")]
             else:
                 self._debug_print(f"Unknown return type: {return_type}")
-                return None
+                return [] if return_type == "list" else None
         except Exception as e:
-            self._debug_print(f"Error converting executor result {executor_result.final_output.text} to type {return_type}. Exception: {e}")
-            return None
+            self._debug_print(f"Error converting executor result {executor_result} to type {return_type}. Exception: {e}")
+            return [] if return_type == "list" else None
+    
 
     def _return_result(self, result: str):
-        # Store the final answer; execute_plan can read it after the plan finishes.
-        self._final_result = result
-        self._debug_print(f"=== Plan returned result ===\n{result}")
+        # Signal task completion — the return value is not used by the plan.
+        self._debug_print(f"[executor.return_result] {result}")
+
 
     async def execute_plan(self, abs_original_task_root: str) -> None:
 
@@ -222,11 +247,50 @@ class CodingTaskAgent(TaskAgent):
         # Based on the tool list, we want to add functions with the names of the tool calls
         # but these have to be dynamically generated
         # We can use the tool_catalog to generate the functions
-        exec_locals = {'executor' : ExecutorObject(prompt=self._call_executor, call_tool=self._call_tool, return_result=self._return_result)}
+        exec_locals = {
+            'executor' : ExecutorObject(
+                prompt=self._call_executor,
+                call_tool=self._call_tool,
+                return_result=self._return_result
+            )
+        }
         
-        # handle this dumb thing
-        plan = self._plan.replace("executor.prompt", "await executor.prompt")
-        plan = plan.replace("executor.call_tool", "await executor.call_tool")
+        # Inject `await` before executor.prompt/call_tool calls.
+        # Simple string-replace would break method chains like executor.prompt(...).strip()
+        # because `await coroutine.strip()` tries to call .strip() on the unawaited coroutine.
+        # Use bracket-matching so chains become (await executor.prompt(...)).strip() instead.
+        def _inject_await(plan: str, call_name: str) -> str:
+            result = []
+            i = 0
+            pattern = f"executor.{call_name}("
+            while i < len(plan):
+                idx = plan.find(pattern, i)
+                if idx == -1:
+                    result.append(plan[i:])
+                    break
+                result.append(plan[i:idx])
+                # Walk forward from the opening '(' to find the matching ')'
+                start = idx + len(pattern) - 1  # index of '('
+                depth = 1
+                j = start + 1
+                while j < len(plan) and depth > 0:
+                    if plan[j] == "(":
+                        depth += 1
+                    elif plan[j] == ")":
+                        depth -= 1
+                    j += 1
+                # j is now one past the closing ')'
+                call_text = plan[idx:j]
+                if j < len(plan) and plan[j] == ".":
+                    # method chain follows — wrap the whole await in parens
+                    result.append(f"(await {call_text})")
+                else:
+                    result.append(f"await {call_text}")
+                i = j
+            return "".join(result)
+
+        plan = _inject_await(self._plan, "prompt")
+        plan = _inject_await(plan, "call_tool")
         # is there a function?
         if plan.startswith("def"):
             # get the function name
@@ -246,7 +310,8 @@ class CodingTaskAgent(TaskAgent):
         
         # This replaces the _run_interaction_loop
         # No try-catch because exceptions are caught in run()
-        self._debug_print(f"Executing plan: {plan}")
+        # print plan with line numbers
+        self._debug_print(f"Executing plan: {"\n".join([f"{i+1}: {line}" for i, line in enumerate(plan.splitlines())])}")
         await self.aexec(plan, exec_locals, exec_locals)
 
 
@@ -411,7 +476,15 @@ class CodingTaskAgent(TaskAgent):
         # Create planner agent — no MCP servers, no tools, single turn
         planner_instructions = _DEFAULT_PLANNER_INSTRUCTIONS.format(
             tool_catalog=tool_catalog
-        )
+        ) + """
+
+## Execution environment notes
+- The current working directory is already the task workspace directory. Do NOT prefix file paths with "workspace/". Use bare filenames or subdirectory-relative paths (e.g. "personal_info.md", not "workspace/personal_info.md").
+- Do NOT chain methods directly on executor.prompt() or executor.call_tool() calls. Assign the result to a variable first, then call the method on the variable. For example:
+  WRONG:  name = executor.prompt(...).strip()
+  RIGHT:  name = executor.prompt(...)
+          name = name.strip()
+"""
         planner_agent: Agent = Agent(
             name="planner",
             instructions=planner_instructions,
@@ -447,6 +520,7 @@ class CodingTaskAgent(TaskAgent):
         def executor_instructions(ctx: RunContextWrapper, _agent: Agent) -> str:
             parts = [
                 _DEFAULT_EXECUTOR_INSTRUCTIONS,
+                f"## Tools\n{tool_catalog}",
                 f"## Plan\n{self._plan}",
                 f"## Additional Task Context\n{self.task_config.system_prompts.agent}",
             ]

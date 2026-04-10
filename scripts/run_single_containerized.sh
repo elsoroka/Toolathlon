@@ -1,4 +1,5 @@
 #!/bin/bash
+# example  ./run_single_containerized.sh --task_dir finalpool/cvpr-research --modelname gpt-4.1 --provider unified --runmode quickstart --agent_pattern planner_executor
 
 # Script for running a single task in a containerized environment
 # Usage: ./run_single_containerized.sh --task_dir <domain/taskname> --modelname <model> [options]
@@ -20,10 +21,17 @@
 # but do not want to explicitly export these environment variables in your shell,
 # you can also uncomment these lines and set the values here
 # ↓↓↓↓ uncomment these lines ↓↓↓↓
-# TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
-# TOOLATHLON_OPENAI_API_KEY="your-api-key-here"
-# export TOOLATHLON_OPENAI_BASE_URL
-# export TOOLATHLON_OPENAI_API_KEY
+TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
+if [ -f "$(dirname "$0")/../.env" ]; then
+    # Load variables from ../.env (expects TOOLATHLON_OPENAI_API_KEY to be defined there)
+    set -o allexport
+    source "$(dirname "$0")/../.env"
+    set +o allexport
+fi
+TOOLATHLON_OPENAI_API_KEY="${TOOLATHLON_OPENAI_API_KEY// /}"
+TOOLATHLON_OPENAI_BASE_URL="${TOOLATHLON_OPENAI_BASE_URL// /}"
+export TOOLATHLON_OPENAI_BASE_URL
+export TOOLATHLON_OPENAI_API_KEY
 
 set -e
 
