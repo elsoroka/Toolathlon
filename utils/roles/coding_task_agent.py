@@ -76,6 +76,14 @@ class ExecutorObject:
     call_tool: Callable
     return_result: Callable
 
+class LlmPlannerError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(self.message)
+
+class DummyResult:
+    def __init__(self, items: list[MessageOutputItem]) -> None:
+        self.new_items = items
 
 class CodingTaskAgent(TaskAgent):
     # The CodingTaskAgent subclasses the TaskAgent and reimplements run() to support the coding pattern.
@@ -100,7 +108,9 @@ class CodingTaskAgent(TaskAgent):
         coroutine: Awaitable | None = eval(code, _globals, _locals)
         if coroutine is None:
             raise ValueError("The code did not return a coroutine")
-        await coroutine
+        result = await coroutine
+        print("result in aexec is", result)
+        return result
 
     async def _build_tool_server_map(self):
         """Lazily build a map of tool_name -> (server, bare_tool_name). Called once and cached.
@@ -163,40 +173,10 @@ class CodingTaskAgent(TaskAgent):
     
 
     async def _call_executor(self, instructions:str, return_type: str = "str"):
-        """
-        async def extractor(result: RunResult | RunResultStreaming) -> str:
-            #nonlocal received_tool_call_id
-            invocation = result.agent_tool_invocation
-            assert invocation is not None
-            #received_tool_call_id = invocation.tool_call_id
-            return result
 
-        executor_result = None
-        
-        try:
-            tool = self.agent.as_tool(
-                tool_name="executor",
-                tool_description="Nested call to executor agent",
-                custom_output_extractor=extractor,
-            )
-                    
-            parent_tool_context = ToolContext(
-                context=instructions,
-                tool_name="executor",
-                tool_call_id=str(hash(instructions)),
-                tool_arguments=dict(),
-            )
-            executor_result : str | None = await tool.on_invoke_tool(parent_tool_context, dict())
-
-        except Exception as e:
-            self._debug_print(f"Error calling executor on prompt: {instructions}. Exception: {e}")
-            return None
-        
-        if not executor_result:
-            return None
-        """
         # Call the executor agent with the instructions, allowing it to call the mcp servers' tools and take multiple steps on its own.
         # get executor_result as a string
+        self.agent.task = instructions
         executor_result = None
         try:
             result = await Runner.run(
@@ -229,19 +209,41 @@ class CodingTaskAgent(TaskAgent):
             elif return_type == "list":
                 return [str(item).strip(" \"'") for item in str(executor_result).split(",")]
             else:
-                self._debug_print(f"Unknown return type: {return_type}")
-                return [] if return_type == "list" else None
+                raise ValueError(f"Unknown return type: {return_type}")
         except Exception as e:
-            self._debug_print(f"Error converting executor result {executor_result} to type {return_type}. Exception: {e}")
-            return [] if return_type == "list" else None
+            raise ValueError(f"Error converting executor result {executor_result} to type {return_type}. Exception: {e}")
     
 
     def _return_result(self, result: str):
-        # Signal task completion — the return value is not used by the plan.
+        # Signal task completion — stores the result on self for execute_plan to retrieve.
+        self._error = None
         self._debug_print(f"[executor.return_result] {result}")
+        self.logs_to_record.append({
+            "role": "assistant",
+            "content": result,
+            "tool_calls_count": 0,
+        })
+        message = ResponseOutputMessage(
+            id="msg_2",
+            role="assistant",
+            status="completed",
+            type="message",
+            content=[
+                ResponseOutputText(
+                    annotations=[],
+                    text=result,
+                    type="output_text",
+                    logprobs=[],
+                )
+            ],
+        )
+        dummy = DummyResult([MessageOutputItem(agent=self.agent, raw_item=message)])
+        dummy.final_output = message
+        self._executor_result = dummy
 
 
-    async def execute_plan(self, abs_original_task_root: str) -> None:
+    async def execute_plan(self, abs_original_task_root: str) -> RunResult:
+        # this is the parallel to task_agent.run_interaction_loop
 
         # Prepare the exec environment
         # Based on the tool list, we want to add functions with the names of the tool calls
@@ -251,68 +253,29 @@ class CodingTaskAgent(TaskAgent):
             'executor' : ExecutorObject(
                 prompt=self._call_executor,
                 call_tool=self._call_tool,
-                return_result=self._return_result
-            )
+                return_result=self._return_result,
+            ),
+            'result' : None,
         }
-        
-        # Inject `await` before executor.prompt/call_tool calls.
-        # Simple string-replace would break method chains like executor.prompt(...).strip()
-        # because `await coroutine.strip()` tries to call .strip() on the unawaited coroutine.
-        # Use bracket-matching so chains become (await executor.prompt(...)).strip() instead.
-        def _inject_await(plan: str, call_name: str) -> str:
-            result = []
-            i = 0
-            pattern = f"executor.{call_name}("
-            while i < len(plan):
-                idx = plan.find(pattern, i)
-                if idx == -1:
-                    result.append(plan[i:])
-                    break
-                result.append(plan[i:idx])
-                # Walk forward from the opening '(' to find the matching ')'
-                start = idx + len(pattern) - 1  # index of '('
-                depth = 1
-                j = start + 1
-                while j < len(plan) and depth > 0:
-                    if plan[j] == "(":
-                        depth += 1
-                    elif plan[j] == ")":
-                        depth -= 1
-                    j += 1
-                # j is now one past the closing ')'
-                call_text = plan[idx:j]
-                if j < len(plan) and plan[j] == ".":
-                    # method chain follows — wrap the whole await in parens
-                    result.append(f"(await {call_text})")
-                else:
-                    result.append(f"await {call_text}")
-                i = j
-            return "".join(result)
+        # plan = f"""async def solve_task(executor):\n\t{"\n\t".join(lines)}\nawait solve_task(executor)"""
 
-        plan = _inject_await(self._plan, "prompt")
-        plan = _inject_await(plan, "call_tool")
-        # is there a function?
-        if plan.startswith("def"):
-            # get the function name
-            function_name = plan.split("def")[1].split("(")[0].strip()
-            plan.replace("def", "async def")
-            if not function_name in plan.splitlines()[-1]:
-                # append running the function to the plan
-                plan += f"await {function_name}()"
-            else:
-                lines = plan.splitlines()
-                lines[-1].replace(function_name, f"await {function_name}")
-                plan = "\n".join(lines)
-        
-        # there isn't a function, so wrap the plan in one
-        lines = plan.splitlines()
-        plan = f"""async def solve_task(executor):\n\t{"\n\t".join(lines)}\nawait solve_task(executor)"""
-        
+        lines = self._plan.splitlines()
+        if not lines[-1].startswith("\t"):
+            lines[-1] = "result = await solve_task(executor)"
+            self._plan = "\n".join(lines)
+
         # This replaces the _run_interaction_loop
         # No try-catch because exceptions are caught in run()
         # print plan with line numbers
-        self._debug_print(f"Executing plan: {"\n".join([f"{i+1}: {line}" for i, line in enumerate(plan.splitlines())])}")
-        await self.aexec(plan, exec_locals, exec_locals)
+        self._debug_print(f"Executing plan: {"\n".join([f"{i+1}: {line}" for i, line in enumerate(self._plan.splitlines())])}")
+        self._executor_result = None
+        try:
+            await self.aexec(self._plan, exec_locals, exec_locals)
+            print("result is", self._executor_result)
+            return self._executor_result
+        
+        except Exception as e:
+            raise LlmPlannerError(f"Error when executing plan: {e}.")
 
 
     async def run(self) -> TaskStatus:
@@ -345,24 +308,43 @@ class CodingTaskAgent(TaskAgent):
             # Setup agent (LLM assistant)
             await self.setup_agent()
 
-            # Planner phase: generate a plan before the main loop (planner_executor pattern)
-            await self._run_planner_phase(
-                _DEFAULT_PLANNER_INSTRUCTIONS=_DEFAULT_CODING_PLANNER_INSTRUCTIONS,
-                _DEFAULT_EXECUTOR_INSTRUCTIONS=_DEFAULT_CODING_EXECUTOR_INSTRUCTIONS)
-            # the planner creates the _plan variable
-            
-            # Setup user simulator
-            await self.setup_user_simulator()
-            
-            # Switch working dir to agent_workspace
-            os.chdir(self.task_config.agent_workspace)
-            self._debug_print(f"Switched working directory to {self.task_config.agent_workspace}")
+            tries = 0
+            self._prev_error = None
+            success = False
+            while tries < 3 and not success:
+                # Planner phase: generate a plan before the main loop (planner_executor pattern)
+                await self._run_planner_phase(
+                    _DEFAULT_PLANNER_INSTRUCTIONS=_DEFAULT_CODING_PLANNER_INSTRUCTIONS,
+                    _DEFAULT_EXECUTOR_INSTRUCTIONS=_DEFAULT_CODING_EXECUTOR_INSTRUCTIONS)
+                # the planner creates the _plan variable
+                
+                # Setup user simulator
+                await self.setup_user_simulator()
+                
+                # Switch working dir to agent_workspace
+                os.chdir(self.task_config.agent_workspace)
+                self._debug_print(f"Switched working directory to {self.task_config.agent_workspace}")
 
-            # Enter running status
-            self.status_manager.update_running("running")
+                # Enter running status
+                self.status_manager.update_running("running")
 
-            # Main interaction loop
-            await self.execute_plan(os.path.abspath(self.task_config.task_root))
+                # Main interaction loop
+                try:
+                    result = await self.execute_plan(os.path.abspath(self.task_config.task_root))
+                    print("result is last", result)
+                    if result.final_output is not None:
+                        success = True
+                    else:
+                        raise ValueError(f"Plan didn't produce a final result: {result.final_output}")
+                
+                except LlmPlannerError as e:
+                    self._prev_error = f"Error when executing plan: {e}. Traceback: {traceback.format_exc()}. Try again..."
+                    tries += 1
+                    if tries < 3:
+                        self._debug_print(f"Error when executing plan: {self._prev_error}. Retrying...")
+                        continue
+                    else:
+                        raise e
 
             # Switch back to the original cwd
             os.chdir(current_dir)
@@ -484,7 +466,11 @@ class CodingTaskAgent(TaskAgent):
   WRONG:  name = executor.prompt(...).strip()
   RIGHT:  name = executor.prompt(...)
           name = name.strip()
+
+- Implement your plan in an async function called solve_task(executor), then call `await solve_task(executor)` in the last line.
 """
+        if self._prev_error:
+            planner_instructions += f"\n## Your last plan:\n{self._plan} resulted in the error:\n{self._prev_error}. Make sure to avoid this error in your plan."
         planner_agent: Agent = Agent(
             name="planner",
             instructions=planner_instructions,
@@ -521,9 +507,11 @@ class CodingTaskAgent(TaskAgent):
             parts = [
                 _DEFAULT_EXECUTOR_INSTRUCTIONS,
                 f"## Tools\n{tool_catalog}",
-                f"## Plan\n{self._plan}",
-                f"## Additional Task Context\n{self.task_config.system_prompts.agent}",
+                f"## Task\n{_agent.task}",
+                f"## Memory of your previous actions\n{self._memory}",
             ]
+                #f"## Additional Task Context\n{self.task_config.system_prompts.agent}",
+            #]
             if self._memory:
                 parts.append(f"## Memory of your previous actions\n{self._memory}")
             return "\n\n".join(parts)
@@ -531,7 +519,7 @@ class CodingTaskAgent(TaskAgent):
         # Closure so writes go to self._memory (no shared context object needed)
         @_function_tool
         def update_memory(ctx: RunContextWrapper, note: str) -> str:
-            """Append a note to your working memory (e.g. 'Completed step 2: found 3 files'). Call this after each plan step so you can track progress."""
+            """Append a note to your working memory (e.g. 'Completed step 2: found 3 files'). Call this to track progress on your task."""
             self._memory = (self._memory + "\n" + note).strip()
             return "Memory updated."
 
@@ -553,4 +541,4 @@ class CodingTaskAgent(TaskAgent):
                    for k in vars(self.agent_config.generation)},
             ),
         )
-        self._debug_print("=== Executor agent rebuilt with plan ===")
+        self._debug_print("=== Executor agent rebuilt with prompt ===")
