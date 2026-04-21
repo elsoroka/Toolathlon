@@ -1,21 +1,45 @@
 #!/bin/bash
+# example  ./run_single_decoupled.sh --task_dir finalpool/find-alita-paper --modelname gpt-4.1 --provider unified --runmode quickstart --agent_pattern planner_executor
 
 # Script for running a single task in decoupled mode:
 # preprocess + gateway in container, agent loop on host, eval in container.
-# Usage:
+#
+# Named flag usage (preferred):
+#   ./run_single_decoupled.sh --task_dir <domain/taskname> --modelname <model> [options]
+#
+# Required:
+#   --task_dir        <domain/taskname>   e.g. finalpool/find-alita-paper
+#   --modelname       <model>             e.g. anthropic/claude-sonnet-4.5
+#
+# Optional:
+#   --runmode         <mode>              normal|quickstart (default: normal)
+#   --dump_path       <path>              (default: ./dumps_quick_start)
+#   --provider        <provider>          (default: unified)
+#   --maxstep         <n>                 (default: 100)
+#   --eval_config     <path>              (default: scripts/formal_run_v0.json)
+#   --image_name      <image>             (default: lockon0927/toolathlon-task-image:1016beta)
+#   --agent_pattern   <pattern>           default|planner_executor|coding (default: default)
+#   --agent_framework <framework>         toolathlon_default|claude_agent_sdk (default: toolathlon_default)
+#   --gateway_port    <port>              (default: auto-assigned)
+#
+# Legacy positional usage (still supported):
 #   ./run_single_decoupled.sh <task_dir> <runmode> <dump_path> <modelname> \
 #     [provider] [maxstep] [eval_config] [image_name] [agent_framework] [gateway_port]
-#
-# Supported agent frameworks:
-#   - toolathlon_default
-#   - claude_agent_sdk
-#
-# Legacy compatibility:
-#   This script also accepts the old positional layout:
-#   [gateway_port] [host_loop_backend] [tool_call_mode]
 
-#### If you want to use the unified model provider, 
-# but do not want to explicitly export these environment variables in your shell, 
+TOOLATHLON_OPENAI_BASE_URL="https://api.openai.com/v1"
+if [ -f "$(dirname "$0")/../.env" ]; then
+    # Load variables from ../.env (expects TOOLATHLON_OPENAI_API_KEY to be defined there)
+    set -o allexport
+    source "$(dirname "$0")/../.env"
+    set +o allexport
+fi
+TOOLATHLON_OPENAI_API_KEY="${TOOLATHLON_OPENAI_API_KEY// /}"
+TOOLATHLON_OPENAI_BASE_URL="${TOOLATHLON_OPENAI_BASE_URL// /}"
+export TOOLATHLON_OPENAI_BASE_URL
+export TOOLATHLON_OPENAI_API_KEY
+
+#### If you want to use the unified model provider,
+# but do not want to explicitly export these environment variables in your shell,
 # you can also uncomment these lines and set the values here
 # ↓↓↓↓ uncomment these lines ↓↓↓↓
 # TOOLATHLON_OPENAI_BASE_URL="your-custom-base-url"
@@ -24,23 +48,6 @@
 # export TOOLATHLON_OPENAI_API_KEY
 
 set -e
-
-task_dir_arg=$1 # domain/taskname
-runmode=${2:-"normal"}
-dump_path=${3:-"./dumps_quick_start"}
-modelname=${4:-"anthropic/claude-sonnet-4.5"}
-provider=${5:-"unified"}
-maxstep=${6:-"100"}
-eval_config=${7:-"scripts/formal_run_v0.json"}
-image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
-arg9=${9:-""}
-arg10=${10:-""}
-arg11=${11:-""}
-
-agent_framework="${TOOLATHLON_AGENT_FRAMEWORK:-toolathlon_default}"
-gateway_port=""
-host_loop_backend=""
-tool_call_mode="parallel"
 
 resolve_agent_framework() {
     case "$1" in
@@ -70,32 +77,92 @@ resolve_host_loop_backend() {
     esac
 }
 
-if resolved_framework=$(resolve_agent_framework "$arg9"); then
-    agent_framework="$resolved_framework"
-    gateway_port="$arg10"
-elif [ -z "$arg9" ]; then
-    gateway_port="$arg10"
+# Defaults
+task_dir_arg=""
+runmode="normal"
+dump_path="./dumps_quick_start"
+modelname="anthropic/claude-sonnet-4.5"
+provider="unified"
+maxstep="100"
+eval_config="scripts/formal_run_v0.json"
+image_name="lockon0927/toolathlon-task-image:1016beta"
+agent_pattern="default"
+agent_framework="${TOOLATHLON_AGENT_FRAMEWORK:-toolathlon_default}"
+gateway_port=""
+host_loop_backend=""
+tool_call_mode="parallel"
+
+# Named flag parsing vs legacy positional parsing
+if [[ "${1:-}" == --* ]]; then
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --*=*)
+                key="${1%%=*}"
+                val="${1#*=}"
+                set -- "$key" "$val" "${@:2}"
+                ;;
+            --task_dir)        task_dir_arg="$2";   shift 2 ;;
+            --runmode)         runmode="$2";         shift 2 ;;
+            --dump_path)       dump_path="$2";       shift 2 ;;
+            --modelname)       modelname="$2";       shift 2 ;;
+            --provider)        provider="$2";        shift 2 ;;
+            --maxstep)         maxstep="$2";         shift 2 ;;
+            --eval_config)     eval_config="$2";     shift 2 ;;
+            --image_name)      image_name="$2";      shift 2 ;;
+            --agent_pattern)   agent_pattern="$2";   shift 2 ;;
+            --agent_framework) agent_framework="$2"; shift 2 ;;
+            --gateway_port)    gateway_port="$2";    shift 2 ;;
+            *) echo "Unknown argument: $1"; exit 1 ;;
+        esac
+    done
+    if resolved_framework=$(resolve_agent_framework "$agent_framework"); then
+        agent_framework="$resolved_framework"
+    else
+        echo "Unsupported agent_framework: $agent_framework"
+        echo "Supported values: toolathlon_default, claude_agent_sdk"
+        exit 1
+    fi
 else
-    # Legacy positional layout:
-    #   [gateway_port] [host_loop_backend] [tool_call_mode]
-    gateway_port="$arg9"
-    host_loop_backend="${arg10:-openai}"
-    tool_call_mode="${arg11:-parallel}"
-    case "$host_loop_backend" in
-        openai|openai_agents)
-            agent_framework="toolathlon_default"
-            host_loop_backend="openai"
-            ;;
-        claude|claude_sdk|claude_agent_sdk)
-            agent_framework="claude_agent_sdk"
-            host_loop_backend="claude_sdk"
-            ;;
-        *)
-            echo "Unsupported legacy host_loop_backend: $host_loop_backend"
-            echo "Supported values: openai, claude_sdk"
-            exit 1
-            ;;
-    esac
+    # Legacy positional layout
+    task_dir_arg=$1
+    runmode=${2:-"normal"}
+    dump_path=${3:-"./dumps_quick_start"}
+    modelname=${4:-"anthropic/claude-sonnet-4.5"}
+    provider=${5:-"unified"}
+    maxstep=${6:-"100"}
+    eval_config=${7:-"scripts/formal_run_v0.json"}
+    image_name=${8:-"lockon0927/toolathlon-task-image:1016beta"}
+    arg9=${9:-""}
+    arg10=${10:-""}
+    arg11=${11:-""}
+
+    if resolved_framework=$(resolve_agent_framework "$arg9"); then
+        agent_framework="$resolved_framework"
+        gateway_port="$arg10"
+    elif [ -z "$arg9" ]; then
+        gateway_port="$arg10"
+    else
+        # Legacy positional layout:
+        #   [gateway_port] [host_loop_backend] [tool_call_mode]
+        gateway_port="$arg9"
+        host_loop_backend="${arg10:-openai}"
+        tool_call_mode="${arg11:-parallel}"
+        case "$host_loop_backend" in
+            openai|openai_agents)
+                agent_framework="toolathlon_default"
+                host_loop_backend="openai"
+                ;;
+            claude|claude_sdk|claude_agent_sdk)
+                agent_framework="claude_agent_sdk"
+                host_loop_backend="claude_sdk"
+                ;;
+            *)
+                echo "Unsupported legacy host_loop_backend: $host_loop_backend"
+                echo "Supported values: openai, claude_sdk"
+                exit 1
+                ;;
+        esac
+    fi
 fi
 
 if [ -z "$host_loop_backend" ]; then
@@ -118,9 +185,9 @@ gateway_log_path="${dump_path}/${taskdomain}/${taskname}/gateway.log"
 eval_log_path="${dump_path}/${taskdomain}/${taskname}/eval.log"
 output_folder="${dump_path}/${taskdomain}/${taskname}"
 
-if [ -z "$task_dir_arg" ] || [ -z "$runmode" ] || [ -z "$modelname" ]; then
-    echo "Usage: $0 <task_dir> <runmode> <dump_path> <modelname> [provider] [maxstep] [eval_config] [image_name] [agent_framework] [gateway_port]"
-    echo "Example: $0 finalpool/find-alita-paper quickstart /tmp/dumps anthropic/claude-sonnet-4.5 unified 100 scripts/formal_run_v0.json lockon0927/toolathlon-task-image:1016beta toolathlon_default"
+if [ -z "$task_dir_arg" ] || [ -z "$modelname" ]; then
+    echo "Usage: $0 --task_dir <domain/taskname> --modelname <model> [--runmode normal|quickstart] [--dump_path ./dumps] [--provider unified] [--maxstep 100] [--eval_config scripts/formal_run_v0.json] [--image_name <image>] [--agent_pattern default|planner_executor] [--agent_framework toolathlon_default|claude_agent_sdk] [--gateway_port <port>]"
+    echo "Example: $0 --task_dir finalpool/find-alita-paper --runmode quickstart --dump_path ./dumps --modelname anthropic/claude-sonnet-4.5"
     exit 1
 fi
 
@@ -134,6 +201,7 @@ echo "Task directory: $task_dir_arg"
 echo "Runmode: $runmode"
 echo "Modelname: $modelname"
 echo "Agent framework: $agent_framework"
+echo "Agent pattern: $agent_pattern"
 echo "Host loop backend: $host_loop_backend"
 echo "Tool call mode: $tool_call_mode"
 echo "Container log: $container_log_path"
@@ -270,6 +338,8 @@ FILES_TO_COPY=(
     "local_binary/github-mcp-server"
     "utils"
     "main.py"
+    "pyproject.toml"
+    "uv.lock"
 )
 
 # Verify all required files/directories exist
@@ -370,6 +440,8 @@ eval_log_path="${output_folder}/eval.log"
 START_CONTAINER_ARGS+=(
     # Mount output folder as /workspace/dumps
     "-v" "$output_folder:/workspace/dumps"
+    # Also mount the output folder at its host path so the filesystem MCP can use host-side paths
+    "-v" "$output_folder:$output_folder"
     # Mount log directory
     "-v" "$RUN_LOG_DIR:/workspace/logs"
     # Set working directory
@@ -463,6 +535,15 @@ if [ "$TARGET_PARENT_DIR" != "." ]; then
 fi
 # Copy actual task directory
 $CONTAINER_RUNTIME cp "$TASK_SOURCE" "$CONTAINER_NAME:/workspace/tasks/$TARGET_PARENT_DIR/"
+
+# Copy openai-agents-python (outside project root; pyproject.toml references it as "../openai-agents-python")
+OAP_SOURCE="$PROJECT_ROOT/../openai-agents-python"
+if [ -d "$OAP_SOURCE" ]; then
+    echo "  Copying openai-agents-python to container at /openai-agents-python..."
+    $CONTAINER_RUNTIME cp "$OAP_SOURCE" "$CONTAINER_NAME:/openai-agents-python"
+else
+    echo "  Warning: openai-agents-python not found at $OAP_SOURCE, skipping"
+fi
 
 echo "✓ File copying completed"
 
@@ -570,7 +651,24 @@ if [ $PREPROCESS_EXIT_CODE -ne 0 ]; then
 fi
 echo "✓ Preprocess completed"
 
+# Fix permissions on files written by root inside the container so the host agent can read/write them.
+# Must run as root inside the container because the files are owned by root.
+$CONTAINER_RUNTIME exec "$CONTAINER_NAME" chmod -R a+rw /workspace/dumps
+
 HOST_BUNDLE_FILE="${output_folder}/task_bundle.json"
+
+# Patch the bundle so the gateway configures MCP servers (e.g. filesystem) with host-side paths.
+# This makes paths consistent between the agent's system prompt (host paths) and the MCP tools.
+python3 -c "
+import json
+path = '$HOST_BUNDLE_FILE'
+with open(path) as f:
+    bundle = json.load(f)
+bundle['container_paths'] = bundle['host_paths']
+with open(path, 'w') as f:
+    json.dump(bundle, f, indent=2)
+print('Patched bundle: container_paths -> host_paths')
+"
 if [ ! -f "$HOST_BUNDLE_FILE" ]; then
     echo "✗ Missing bundle file after preprocess: $HOST_BUNDLE_FILE"
     exit 1
@@ -609,6 +707,7 @@ case "$host_loop_backend" in
             --bundle_file "$HOST_BUNDLE_FILE"
             --gateway_url "http://127.0.0.1:${gateway_port}/sse"
             --gateway_server_name "gw"
+            --agent_pattern "$agent_pattern"
             --debug
         )
         ;;
@@ -620,6 +719,7 @@ case "$host_loop_backend" in
             --gateway_server_name "gw"
             --model "$modelname"
             --tool_call_mode "$tool_call_mode"
+            --agent_pattern "$agent_pattern"
             --debug
         )
         ;;
