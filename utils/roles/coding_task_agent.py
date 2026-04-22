@@ -88,10 +88,19 @@ class DummyResult:
 class CodingTaskAgent(TaskAgent):
     # The CodingTaskAgent subclasses the TaskAgent and reimplements run() to support the coding pattern.
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, preplanned_file:str = None, **kwargs):
         super().__init__(*args, **kwargs)
         self._plan = None
         self._memory = "" # this is the executor memory
+        self.preplanned_plans = dict()
+        if preplanned_file:
+            with open(preplanned_file, "r") as f:
+                for line in f:
+                    data = json.loads(line)
+                    self.preplanned_plans[data["task_id"]] = data["clean_response"]
+            print("**PREPLANNED PLANS**", self.preplanned_plans.keys())
+        else:
+            print("**NO PREPLANNED PLANS**")
 
 
     # https://stackoverflow.com/questions/44859165/async-exec-in-python
@@ -185,6 +194,7 @@ class CodingTaskAgent(TaskAgent):
                 run_config=RunConfig(model_provider=self.agent_model_provider),
                 max_turns=self.agent_config.tool.max_inner_turns,
             )
+            
             for raw_response in result.raw_responses:
                 self.usage.add(raw_response.usage)
                 self.stats["agent_llm_requests"] += 1
@@ -407,19 +417,7 @@ class CodingTaskAgent(TaskAgent):
             
         return self.task_status
 
-
-    async def _run_planner_phase(self,
-        _DEFAULT_PLANNER_INSTRUCTIONS=_DEFAULT_CODING_PLANNER_INSTRUCTIONS,
-        _DEFAULT_EXECUTOR_INSTRUCTIONS=_DEFAULT_CODING_EXECUTOR_INSTRUCTIONS) -> None:
-        """Run a single-turn planner agent to generate a Python plan.
-
-        Builds a full tool catalog (name, description, parameter schemas) from the
-        connected MCP servers, runs a planner Agent, then stores the resulting Python
-        plan in self._plan. Does NOT rebuild self.agent — coding execution bypasses the
-        LLM executor loop entirely.
-        """
-        self._debug_print("=== Running planner phase ===")
-
+    async def _build_tool_catalog(self):
         # Build rich tool catalog directly from MCP servers so the planner sees
         # full parameter names and types, not just one-line descriptions.
         # Also warms up the tool->server map cache used by _call_tool.
@@ -454,7 +452,30 @@ class CodingTaskAgent(TaskAgent):
                         param_parts.append(f"    - {param_name}: {ptype}{req}{pdesc_str}")
                     lines.extend(param_parts)
         tool_catalog = "\n".join(lines) if lines else "(no tools available)"
+        return tool_catalog
 
+    async def _run_planner_phase(self,
+        _DEFAULT_PLANNER_INSTRUCTIONS=_DEFAULT_CODING_PLANNER_INSTRUCTIONS,
+        _DEFAULT_EXECUTOR_INSTRUCTIONS=_DEFAULT_CODING_EXECUTOR_INSTRUCTIONS) -> None:
+        """Run a single-turn planner agent to generate a Python plan.
+
+        Builds a full tool catalog (name, description, parameter schemas) from the
+        connected MCP servers, runs a planner Agent, then stores the resulting Python
+        plan in self._plan. Does NOT rebuild self.agent — coding execution bypasses the
+        LLM executor loop entirely.
+        """
+        self._debug_print("=== Running planner phase ===")
+        print(self.task_config.id)
+        print("**PLANS**", self.preplanned_plans.keys())
+        id = self.task_config.id
+        if id.startswith("finalpool-"):
+            id = id[len("finalpool-"):]
+        if id in self.preplanned_plans:
+            self._plan = self.preplanned_plans[id]
+            self._memory = ""
+            self._debug_print(f"=== Plan loaded from file ===\n{self._plan}")
+            return
+        tool_catalog = await self._build_tool_catalog()
         # Create planner agent — no MCP servers, no tools, single turn
         planner_instructions = _DEFAULT_PLANNER_INSTRUCTIONS.format(
             tool_catalog=tool_catalog
@@ -505,8 +526,9 @@ class CodingTaskAgent(TaskAgent):
         # Callable so memory is re-evaluated fresh each turn
         def executor_instructions(ctx: RunContextWrapper, _agent: Agent) -> str:
             parts = [
-                _DEFAULT_EXECUTOR_INSTRUCTIONS,
-                f"## Tools\n{tool_catalog}",
+                _DEFAULT_EXECUTOR_INSTRUCTIONS.format(
+                    tool_catalog=tool_catalog
+                ),
                 f"## Task\n{_agent.task}",
                 f"## Memory of your previous actions\n{self._memory}",
             ]

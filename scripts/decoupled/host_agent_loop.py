@@ -18,6 +18,7 @@ from utils.general.helper import (
     setup_proxy,
 )
 from utils.roles.task_agent import TaskAgent, TaskStatus
+from utils.roles.coding_task_agent import CodingTaskAgent
 from utils.task_runner.runner import TaskRunner
 from utils.task_runner.termination_checkers import default_termination_checker
 
@@ -288,6 +289,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--with_proxy", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--allow_resume", action="store_true")
+    parser.add_argument("--agent_pattern", default="default")
     return parser.parse_args()
 
 
@@ -324,7 +326,8 @@ async def run_host_loop(args: argparse.Namespace) -> int:
     )
     print_log_line("USER", preview_text(task_config.task_str), ANSI_MAGENTA)
 
-    task_agent = PrettyDecoupledTaskAgent(
+    Agent = CodingTaskAgent if args.agent_pattern == "coding" else PrettyDecoupledTaskAgent
+    task_agent = Agent(
         task_config=task_config,
         agent_config=agent_config,
         agent_model_provider=agent_model_provider,
@@ -340,6 +343,7 @@ async def run_host_loop(args: argparse.Namespace) -> int:
         allow_resume=args.allow_resume,
         manual=False,
         single_turn_mode=task_config.single_turn_mode,
+        agent_pattern=args.agent_pattern,
     )
 
     current_dir = os.path.abspath(os.getcwd())

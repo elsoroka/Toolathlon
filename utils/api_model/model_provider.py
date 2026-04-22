@@ -736,7 +736,14 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                                     display_text = text_content[:match.start()] + text_content[match.end():]
                                 stripped_text = display_text.strip()
                                 if stripped_text:
-                                    print("ASSISTANT: ", stripped_text)
+                                    # print the input
+                                    print("INPUT: ")
+                                    for a in args:
+                                        print(a)
+                                    for k, v in kwargs.items():
+                                        print(f"{k}: {str(v)[:1000]}")
+                                    print("\n")
+                                    print("ASSISTANT: ", stripped_text + "\n\n")
                 return model_response
             except Exception as e:
                 error_str = str(e)                

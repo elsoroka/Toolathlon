@@ -110,7 +110,7 @@ async def main():
             prompts.append(result)
         else:
             print(f"Skipping {task_id}: missing task.md or task_config.json")
-
+        
     with open("toolathlon_prompts.jsonl", "w") as f:
         for entry in tqdm(prompts):
             f.write(json.dumps(entry) + "\n")

@@ -16,6 +16,7 @@
 #   --eval_config <path>            (default: scripts/formal_run_v0.json)
 #   --image_name <image>            (default: lockon0927/toolathlon-task-image:1016beta)
 #   --agent_pattern <pattern>       default|planner_executor (default: default)
+#   --preplanned_file <path>        path to JSONL file of pre-made plans (optional)
 
 #### If you want to use the unified model provider,
 # but do not want to explicitly export these environment variables in your shell,
@@ -45,6 +46,7 @@ maxstep="100"
 eval_config="scripts/formal_run_v0.json"
 image_name="lockon0927/toolathlon-task-image:1016beta"
 agent_pattern="default"
+preplanned_file=""
 
 # Parse named flags (supports both --flag value and --flag=value)
 while [[ $# -gt 0 ]]; do
@@ -63,9 +65,15 @@ while [[ $# -gt 0 ]]; do
         --eval_config) eval_config="$2";  shift 2 ;;
         --image_name)  image_name="$2";   shift 2 ;;
         --agent_pattern) agent_pattern="$2"; shift 2 ;;
+        --preplanned_file) preplanned_file="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+# Resolve preplanned_file to absolute path now, before any cd changes the working directory
+if [ ! -z "$preplanned_file" ]; then
+    preplanned_file=$(realpath "$preplanned_file" 2>/dev/null || echo "$preplanned_file")
+fi
 
 taskdomain=${task_dir_arg%/*}
 taskname=${task_dir_arg#*/}
@@ -413,6 +421,19 @@ if [ ! -z "$HOST_MODEL_PARAMS_FILE" ]; then
     echo "✓ Model params file copied"
 fi
 
+# Step 2.5.2: Copy preplanned_file to container if specified
+CONTAINER_PREPLANNED_FILE=""
+if [ ! -z "$preplanned_file" ] && [ -f "$preplanned_file" ]; then
+    CONTAINER_PREPLANNED_FILE="/workspace/preplanned_plans.jsonl"
+    echo ""
+    echo "Step 2.5.2: Copying preplanned file to container..."
+    echo "  Copying ${preplanned_file} to ${CONTAINER_PREPLANNED_FILE}..."
+    $CONTAINER_RUNTIME cp "$preplanned_file" "$CONTAINER_NAME:${CONTAINER_PREPLANNED_FILE}"
+    echo "✓ Preplanned file copied"
+elif [ ! -z "$preplanned_file" ]; then
+    echo "Warning: --preplanned_file '$preplanned_file' not found, ignoring"
+fi
+
 # Run the necessary configuration commands in the container
 echo ""
 echo "Step 2.6: Executing necessary configurations..."
@@ -486,8 +507,13 @@ fi
 
 # When running commands in the container, these env variables are already present due to -e at startup.
 
-CONTAINER_CMD="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern --debug > /workspace/logs/$RUN_LOG_FILE_NAME 2>&1"
-CONTAINER_CMD_DISPLAY_INPLACE="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern --debug"
+PREPLANNED_ARG=""
+if [ ! -z "$CONTAINER_PREPLANNED_FILE" ]; then
+    PREPLANNED_ARG="--preplanned_file $CONTAINER_PREPLANNED_FILE"
+fi
+
+CONTAINER_CMD="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern $PREPLANNED_ARG --debug > /workspace/logs/$RUN_LOG_FILE_NAME 2>&1"
+CONTAINER_CMD_DISPLAY_INPLACE="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --agent_pattern $agent_pattern $PREPLANNED_ARG --debug"
 
 # if quickstart mode, use the display inplace command
 if [ "$runmode" = "quickstart" ]; then

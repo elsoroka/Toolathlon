@@ -44,6 +44,8 @@ async def main():
     parser.add_argument("--agent_pattern", type=str, default="default",
                        choices=["default", "planner_executor", "coding"],
                        help="Agent execution pattern (default: standard loop; planner_executor: plan then execute; coding: plan in code and execute in code)")
+    parser.add_argument("--preplanned_file", type=str, default=None,
+                       help="Path to a JSONL file of pre-made plans (each line: {\"task_id\": ..., \"plan\": ...})")
     args = parser.parse_args()
     
     # Set Proxy (if needed)
@@ -82,6 +84,7 @@ async def main():
         manual=args.manual,
         single_turn_mode=not args.multi_turn_mode,
         agent_pattern=args.agent_pattern,
+        preplanned_file=args.preplanned_file,
     )
     
     print_color(f"\n====== Task completed with status ======", "yellow")

@@ -29,6 +29,7 @@ class TaskRunner:
         manual: bool=False,
         single_turn_mode: bool=False,
         agent_pattern: str="default",
+        preplanned_file: Optional[str]=None,
     ) -> TaskStatus:
         """Run a single task"""
         # Build model provider and client
@@ -52,6 +53,10 @@ class TaskRunner:
         if agent_pattern == "coding":
             Agent = CodingTaskAgent # dumb hack
 
+        extra_kwargs = {}
+        if agent_pattern == "coding" and preplanned_file is not None:
+            extra_kwargs["preplanned_file"] = preplanned_file
+
         # Create and run TaskAgent
         task_agent = Agent(
             task_config=task_config,
@@ -70,6 +75,7 @@ class TaskRunner:
             manual=manual,
             single_turn_mode=single_turn_mode,
             agent_pattern=agent_pattern,
+            **extra_kwargs,
         )
         
         return await task_agent.run()
